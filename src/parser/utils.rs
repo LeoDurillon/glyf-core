@@ -11,14 +11,6 @@ static MULTIPLIER_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)"
 ///
 /// This is the core of the depth-aware operator parsing that prevents `>` or `+`
 /// inside attribute values like `:onClick={a>b}` from being mistaken for operators.
-///
-/// # Examples
-/// ```
-/// use glyf_core::parser::find_at_depth_zero;
-/// assert_eq!(find_at_depth_zero("div>p",         '>'), Some(3));
-/// assert_eq!(find_at_depth_zero("(div>p)+span",  '+'), Some(7)); // skips inner '>'
-/// assert_eq!(find_at_depth_zero("a:fn={x>y}+b", '+'), Some(10)); // skips '>' in {}
-/// ```
 pub(super) fn find_at_depth_zero(input: &str, target: char) -> Option<usize> {
     let mut depth = 0usize;
     for (i, c) in input.char_indices() {
@@ -37,17 +29,6 @@ pub(super) fn find_at_depth_zero(input: &str, target: char) -> Option<usize> {
 /// Returns `None` when no `*` is present at depth 0, or when `*` is not
 /// followed by a digit. The `N` value is everything up to the next
 /// non-digit character, so `li*3+span` returns `Some(3)`.
-///
-/// # Examples
-/// ```
-/// use glyf_core::parser::get_multiplier;
-/// assert_eq!(get_multiplier("div*3"),     Some(3));
-/// assert_eq!(get_multiplier("li*12"),     Some(12));
-/// assert_eq!(get_multiplier("*3+span"),   Some(3)); // star-prefixed (after a group)
-/// assert_eq!(get_multiplier("div"),       None);    // no multiplier
-/// assert_eq!(get_multiplier("div*"),      None);    // star with no digits
-/// assert_eq!(get_multiplier("a:x={v*2}"),None);    // star is inside {}, depth > 0
-/// ```
 pub(super) fn get_multiplier(element: &str) -> Option<usize> {
     match element.contains("*") {
         false => return None,

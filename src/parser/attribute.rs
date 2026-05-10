@@ -13,6 +13,8 @@ use std::{fmt::Display, sync::LazyLock};
 
 use regex::Regex;
 
+use crate::config::{Config, ParserMode};
+
 static ATTRIBUTE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(:\{.+?\}|:[\w$-]+=\{.+?\}|:[\w$-]+=[^:<]+|:[\w$-]+|\.[\w\/-]+|#[\w-]+|<.+$)")
         .unwrap()
@@ -57,12 +59,20 @@ impl Attribute {
 
 impl Display for Attribute {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mode = &Config::get().mode;
+
         match self.attribute_type {
             AttributeType::Id => write!(f, " id=\"{}\"", self.value.as_deref().unwrap_or("")),
-            AttributeType::Class => write!(f, " class=\"{}\"", self.identifier),
+            AttributeType::Class => {
+                if mode == &ParserMode::HTML {
+                    write!(f, " class=\"{}\"", self.identifier)
+                } else {
+                    write!(f, " className=\"{}\"", self.identifier)
+                }
+            }
             AttributeType::Props => {
                 if let Some(value) = self.value.as_deref() {
-                    let formatted = if !value.starts_with("{") {
+                    let formatted = if !value.starts_with("{") || mode == &ParserMode::HTML {
                         format!("\"{}\"", value)
                     } else {
                         value.to_string()
@@ -280,6 +290,7 @@ mod tests {
 
         #[test]
         fn props_braced_value_is_not_quoted() {
+            let _guard = Config::for_test(ParserMode::JSX, Default::default());
             let a = Attribute::new(
                 "onClick".into(),
                 Some("{handler}".into()),

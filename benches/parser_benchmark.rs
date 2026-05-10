@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use glyf_core::parser::parse_input;
+use glyf_core::{config::Config, expand};
 
 // The same inputs fed to both algorithms
 const INPUTS: &[(&str, &str)] = &[
@@ -23,9 +25,29 @@ const INPUTS: &[(&str, &str)] = &[
 
 fn bench_parser(c: &mut Criterion) {
     let mut group = c.benchmark_group("parser");
+    let config = Config {
+        mode: glyf_core::config::ParserMode::JSX,
+        snippets: HashMap::from([
+            ("a".to_string(), "a:href".to_string()),
+            ("br".to_string(), "br/".to_string()),
+            ("hr".to_string(), "hr/".to_string()),
+            ("img".to_string(), "img:src:alt".to_string()),
+            ("btn".to_string(), "button".to_string()),
+            ("bq".to_string(), "blockquote".to_string()),
+            (
+                "a:blank".to_string(),
+                "a:href=${0}:target=_blank:rel=noopener noreferrer".to_string(),
+            ),
+            ("input".to_string(), "input/".to_string()),
+        ]),
+    };
     for (name, input) in INPUTS {
         group.bench_with_input(BenchmarkId::new("expand", name), input, |b, input| {
-            b.iter(|| parse_input(input, None, None).unwrap().to_string());
+            b.iter(|| {
+                expand(input, None, Some(config.clone()))
+                    .unwrap()
+                    .to_string()
+            });
         });
     }
     group.finish();

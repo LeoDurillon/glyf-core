@@ -22,14 +22,14 @@
 //! | Parse abbreviation to AST | [`parser::parse_input`] |
 //! | Validate bracket balance | [`checker::input_correctly_close`] |
 
-use std::collections::HashMap;
-
 use crate::{
     checker::input_correctly_close,
+    config::Config,
     parser::{GlyfError, parse_input},
 };
 
 pub mod checker;
+pub mod config;
 pub mod parser;
 
 /// Expands a Glyf abbreviation into an HTML or JSX string.
@@ -87,12 +87,16 @@ pub mod parser;
 /// ```
 /// use std::collections::HashMap;
 /// use glyf_core::expand;
+/// use glyf_core::config::{ParserMode,Config};
+///
 ///
 /// let snippets = HashMap::from([
 ///     ("btn".to_string(), "MyButton".to_string()),
 /// ]);
+/// let config = Config { mode:ParserMode::JSX, snippets};
+///
 /// assert_eq!(
-///     expand("btn", None, Some(&snippets)).unwrap(),
+///     expand("btn", None,Some(config)).unwrap(),
 ///     "<MyButton></MyButton>"
 /// );
 /// ```
@@ -110,13 +114,18 @@ pub mod parser;
 pub fn expand(
     abbr: &str,
     base_level: Option<usize>,
-    custom_snippets: Option<&HashMap<String, String>>,
+    config: Option<Config>,
 ) -> Result<String, GlyfError> {
+    match config {
+        Some(cfg) => Config::init(cfg.mode, cfg.snippets),
+        None => (),
+    };
+
     if !input_correctly_close(abbr) {
         return Err(GlyfError::UnmatchedBrackets);
     }
 
-    return match parse_input(abbr, base_level, custom_snippets) {
+    return match parse_input(abbr, base_level) {
         Ok(node) => Ok(node.to_string()),
         Err(e) => Err(e),
     };
