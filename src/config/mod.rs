@@ -79,7 +79,7 @@ impl Config {
     /// Initialises or replaces the **global** config.
     ///
     /// Safe to call multiple times — subsequent calls replace the previous
-    /// value via the inner [`RwLock`]. Prefer [`Config::for_test`] inside
+    /// value via the inner [`RwLock`]. Prefer `Config::for_test` inside
     /// unit tests to avoid shared-state races between parallel test threads.
     pub fn init(mode: ParserMode, snippets: HashMap<String, String>) {
         let lock = CONFIG.get_or_init(|| RwLock::new(Config::default()));
@@ -114,7 +114,7 @@ impl Config {
     /// Returns a reference to the active config.
     ///
     /// **Resolution order:**
-    /// 1. Thread-local override (test builds only) — set via [`Config::for_test`].
+    /// 1. Thread-local override (test builds only) — set via `Config::for_test`.
     /// 2. Global config — set via [`Config::init`], defaulting to
     ///    [`Config::default`] if `init` was never called.
     ///

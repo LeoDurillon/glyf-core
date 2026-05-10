@@ -47,11 +47,11 @@ jobs:
       - run: cargo doc --no-deps
 
   # ── Minimum Supported Rust Version ───────────────────────────────────────
-  # glyf-core uses edition 2024 → MSRV is 1.85
+  # glyf-core uses edition 2024 → MSRV is 1.86
   msrv:
-    name: MSRV (1.85)
+    name: MSRV (1.86)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo test

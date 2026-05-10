@@ -1,7 +1,7 @@
 //! Glyf abbreviation parser.
 //!
 //! Converts compact Glyf syntax into an [`Element`] AST which renders
-//! to indented HTML/JSX via its [`Display`] implementation.
+//! to indented HTML/JSX via its [`std::fmt::Display`] implementation.
 //!
 //! # Syntax reference
 //!
@@ -19,7 +19,7 @@
 //! | `tag:key={expr}` | JSX prop | `div:onClick={fn}` | `<div onClick={fn}>` |
 //! | `tag<text` | Text content | `p<Hello` | `<p>Hello</p>` |
 //! | `.cls` / `#id` / `:prop` / `>child` | Implicit div | `.foo` | `<div class="foo">` |
-//! | `e` | JSX fragment | `e>p` | `<>\n\t<p></p>\n</>` |
+//! | `e` | JSX fragment (JSX mode only) | `e>p` | `<>\n\t<p></p>\n</>` |
 //!
 //! # Quick start
 //!
@@ -27,7 +27,7 @@
 //! use glyf_core::parser::parse_input;
 //!
 //! assert_eq!(
-//!     parse_input("ul>li.item*2", None, ).unwrap().to_string(),
+//!     parse_input("ul>li.item*2", None).unwrap().to_string(),
 //!     "<ul>\n\t<li class=\"item\"></li>\n\t<li class=\"item\"></li>\n</ul>"
 //! );
 //! ```
@@ -58,11 +58,11 @@ const IMPLICIT_DIV_PREFIXES: [char; 4] = [':', '.', '#', '>'];
 /// use glyf_core::parser::parse_group;
 ///
 /// // (div)*3 — three divs at root level
-/// let s = parse_group("(div)*3", None, ).unwrap().to_string();
+/// let s = parse_group("(div)*3", None).unwrap().to_string();
 /// assert_eq!(s, "<div></div>\n<div></div>\n<div></div>");
 ///
 /// // (ul>li)+p — group followed by a sibling
-/// let s = parse_group("(ul>li)+p", None, ).unwrap().to_string();
+/// let s = parse_group("(ul>li)+p", None).unwrap().to_string();
 /// assert_eq!(s, "<ul>\n\t<li></li>\n</ul>\n<p></p>");
 /// ```
 pub fn parse_group(input: &str, level: Option<usize>) -> Result<Element, GlyfError> {
@@ -128,25 +128,24 @@ pub fn parse_group(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
 /// use std::collections::HashMap;
 ///
 /// // Simple element
-/// assert_eq!(parse_input("div", None, ).unwrap().to_string(), "<div></div>");
+/// assert_eq!(parse_input("div", None).unwrap().to_string(), "<div></div>");
 ///
 /// // Nested children with indentation
 /// assert_eq!(
-///     parse_input("ul>li", None, ).unwrap().to_string(),
+///     parse_input("ul>li", None).unwrap().to_string(),
 ///     "<ul>\n\t<li></li>\n</ul>"
 /// );
 ///
 /// // Implicit div — leading '.' triggers div wrapper
 /// assert_eq!(
-///     parse_input(".card", None, ).unwrap().to_string(),
+///     parse_input(".card", None).unwrap().to_string(),
 ///     "<div class=\"card\"></div>"
 /// );
 ///
-///
+/// // JSX fragment — 'e' is recognised directly in JSX mode (no snippet needed)
 /// Config::init(ParserMode::JSX, HashMap::new());
-/// // JSX fragment — 'e' snippet expands to an empty identifier
 /// assert_eq!(
-///     parse_input("e>p", None, ).unwrap().to_string(),
+///     parse_input("e>p", None).unwrap().to_string(),
 ///     "<>\n\t<p></p>\n</>"
 /// );
 /// ```

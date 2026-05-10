@@ -49,8 +49,9 @@ pub mod parser;
 ///   `None` and `Some(0)` both produce unindented root output.
 ///   `Some(n)` prefixes every root-level element with `n` tabs, useful
 ///   when embedding the expansion inside an already-indented block.
-/// - `custom_snippets` — User-defined snippet aliases that extend or
-///   shadow the built-in table.  Pass `None` to use built-ins only.
+/// - `config` — Optional [`Config`] that sets the parser mode and provides
+///   user-defined snippet aliases. Pass `None` to keep the current global
+///   config unchanged (defaulting to HTML mode with no custom snippets).
 ///
 /// # Errors
 ///

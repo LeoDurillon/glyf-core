@@ -94,8 +94,8 @@ impl Display for Attribute {
 /// e.g. for `div.foo#bar:disabled` this receives `.foo#bar:disabled`.
 ///
 /// Prop values are handled in two ways:
-/// - `{expr}` — kept as-is (JSX expression, no quotes added)
-/// - `plain`  — wrapped in `"quotes"` (standard HTML attribute)
+/// - `{expr}` — kept as-is in JSX mode; wrapped in `"quotes"` in HTML mode
+/// - `plain`  — always wrapped in `"quotes"`
 pub fn parse_attribute(attributes: &str) -> Vec<Attribute> {
     let matcher = ATTRIBUTE_REGEX.find_iter(attributes);
     let mut attributes: Vec<Attribute> = Vec::new();

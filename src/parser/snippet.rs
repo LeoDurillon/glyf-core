@@ -10,8 +10,9 @@ const SNIPPET_BOUNDARIES: &[char] = &[':', '.', '#', '>', '+', '*', '<', '/'];
 
 /// Expands a snippet alias to its fuller Glyf form.
 ///
-/// Looks up the longest key in [`Snippet::get`] that is a prefix of `value`
-/// and is either an exact match or immediately followed by `:`.
+/// Looks up the longest key in the active snippet table (from [`Config::get`])
+/// that is a prefix of `value` and is either an exact match or immediately
+/// followed by a boundary character.
 /// If no key matches, `value` is returned unchanged.
 ///
 /// The returned string is still an Glyf string, not HTML — it is fed back

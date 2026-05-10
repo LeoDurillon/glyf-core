@@ -48,7 +48,7 @@ pub struct Node {
 /// | `identifier` | `group` | Meaning |
 /// |---|---|---|
 /// | `Some("div")` | `None` | A concrete element: `<div>` |
-/// | `Some("")` | `None` | A JSX fragment: `<></>` |
+/// | `Some("")` | `None` | A JSX fragment: `<></>` (JSX mode only) |
 /// | `None` | `Some(inner)` | A `(...)` group, or a multi-element snippet expansion |
 ///
 /// `Display` renders the element (and the full subtree rooted here) to
@@ -94,8 +94,9 @@ impl Element {
     ///   re-parsed via [`parse_input`] and wrapped as a group (`identifier = None`,
     ///   `group = Some(inner)`), exactly like an explicit `(...)` group expression.
     /// - If `value` is `None`, the element is a group wrapper (`identifier = None`).
-    /// - An empty string after snippet expansion (`"e"` → `""`) produces a JSX fragment
-    ///   (`identifier = Some("")`, renders as `<></>`)
+    /// - In JSX mode ([`crate::config::ParserMode::JSX`]), the literal identifier `"e"`
+    ///   is recognised directly and produces a JSX fragment
+    ///   (`identifier = Some("")`, renders as `<></>`) — no snippet entry needed.
     ///
     /// # Errors
     /// Returns [`GlyfError::NoIdentifier`] when `value` is non-empty but contains
