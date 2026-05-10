@@ -4,7 +4,7 @@
 //! parsed abbreviation tree. Elements are linked together via [`Node`]
 //! which carries a [`NodeType`] to describe the relationship.
 
-use std::{fmt::Display, iter::repeat, sync::LazyLock};
+use std::{fmt::Display, iter::repeat_n, sync::LazyLock};
 
 use regex::Regex;
 
@@ -125,7 +125,7 @@ impl Element {
                 };
             }
 
-            if &mode == &ParserMode::JSX && &transformed_value == "e" {
+            if mode == ParserMode::JSX && &transformed_value == "e" {
                 return Ok(Self {
                     identifier: Some(String::new()),
                     self_closing: false,
@@ -155,7 +155,7 @@ impl Element {
             return Ok(Self {
                 identifier: Some(identifier),
                 self_closing,
-                attributes: if attributes.len() > 0 {
+                attributes: if !attributes.is_empty() {
                     Some(attributes)
                 } else {
                     None
@@ -168,7 +168,7 @@ impl Element {
         }
 
         // If no value then we return default
-        return Ok(Self {
+        Ok(Self {
             identifier: None,
             self_closing: false,
             attributes: None,
@@ -176,7 +176,7 @@ impl Element {
             multiplier,
             node,
             level,
-        });
+        })
     }
 }
 
@@ -196,9 +196,9 @@ impl Display for Element {
         );
 
         if let Some(node) = self.node.as_ref() {
-            if &node.node_type == &NodeType::Children {
+            if node.node_type == NodeType::Children {
                 child = node.node.to_string()
-            } else if &node.node_type == &NodeType::Sibling {
+            } else if node.node_type == NodeType::Sibling {
                 sibling = node.node.to_string()
             }
         }
@@ -238,7 +238,7 @@ impl Display for Element {
                 String::new()
             };
 
-            let class_attribute = if classes.len() > 0 {
+            let class_attribute = if !classes.is_empty() {
                 match mode {
                     ParserMode::HTML => format!(" class=\"{}\"", classes),
                     ParserMode::JSX => format!(" className=\"{}\"", classes),
@@ -249,7 +249,7 @@ impl Display for Element {
 
             let main = format!("{}{}{}", identifier, props_attributes, class_attribute);
 
-            if self.self_closing && child.len() == 0 && text_attribute.len() == 0 {
+            if self.self_closing && child.is_empty() && text_attribute.is_empty() {
                 value = format!("{}<{} />", prefix, main);
             } else {
                 value = format!(
@@ -263,8 +263,7 @@ impl Display for Element {
             value = group.to_string();
         }
 
-        let repeated = repeat(value.as_str())
-            .take(self.multiplier)
+        let repeated = repeat_n(value.as_str(), self.multiplier)
             .collect::<Vec<&str>>()
             .join(if is_first_level { "\n" } else { "" });
 
@@ -274,7 +273,7 @@ impl Display for Element {
             sibling
         };
 
-        return write!(f, "{}{}", repeated, sibling_output);
+        write!(f, "{}{}", repeated, sibling_output)
     }
 }
 

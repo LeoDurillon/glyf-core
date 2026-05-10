@@ -116,17 +116,16 @@ pub fn expand(
     base_level: Option<usize>,
     config: Option<Config>,
 ) -> Result<String, GlyfError> {
-    match config {
-        Some(cfg) => Config::init(cfg.mode, cfg.snippets),
-        None => (),
-    };
+    if let Some(cfg) = config {
+        Config::init(cfg.mode, cfg.snippets);
+    }
 
     if !input_correctly_close(abbr) {
         return Err(GlyfError::UnmatchedBrackets);
     }
 
-    return match parse_input(abbr, base_level) {
+    match parse_input(abbr, base_level) {
         Ok(node) => Ok(node.to_string()),
         Err(e) => Err(e),
-    };
+    }
 }

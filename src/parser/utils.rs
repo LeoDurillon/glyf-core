@@ -31,23 +31,18 @@ pub(super) fn find_at_depth_zero(input: &str, target: char) -> Option<usize> {
 /// non-digit character, so `li*3+span` returns `Some(3)`.
 pub(super) fn get_multiplier(element: &str) -> Option<usize> {
     match element.contains("*") {
-        false => return None,
+        false => None,
         true => {
-            let Some(index) = find_at_depth_zero(element, '*') else {
-                return None;
-            };
+            let index = find_at_depth_zero(element, '*')?;
+
             let slice = element.split_at(index + 1).1;
-            let Some(capture) = MULTIPLIER_REGEX.captures(slice) else {
-                return None;
-            };
+            let capture = MULTIPLIER_REGEX.captures(slice)?;
 
-            let Some(multiplier) = capture.get(0) else {
-                return None;
-            };
+            let multiplier = capture.get(0)?;
 
-            return Some(multiplier.as_str().parse::<usize>().unwrap_or(1));
+            Some(multiplier.as_str().parse::<usize>().unwrap_or(1))
         }
-    };
+    }
 }
 
 #[cfg(test)]

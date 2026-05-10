@@ -40,13 +40,13 @@ pub(super) fn parse_snippet(value: &str) -> String {
         })
         .max_by_key(|key| key.len());
 
-    if let Some(key) = matching_key {
-        if let Some(expanded) = snippets.get(key) {
-            transformed_value = format!("{}{}", expanded, value.split_at(key.len()).1);
-        }
+    if let Some(key) = matching_key
+        && let Some(expanded) = snippets.get(key)
+    {
+        transformed_value = format!("{}{}", expanded, value.split_at(key.len()).1);
     }
 
-    return transformed_value;
+    transformed_value
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ pub fn input_correctly_close(input: &str) -> bool {
         }
     }
 
-    return opener.len() == 0;
+    opener.is_empty()
 }
 
 #[cfg(test)]

@@ -139,7 +139,8 @@ pub fn parse_attribute(attributes: &str) -> Vec<Attribute> {
             _ => {}
         }
     }
-    return attributes;
+
+    attributes
 }
 
 #[cfg(test)]

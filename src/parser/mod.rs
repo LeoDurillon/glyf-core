@@ -78,37 +78,35 @@ pub fn parse_group(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
 
     let mut multiplier = 1;
 
-    if rest.len() > 0 && rest.starts_with("*") {
-        multiplier = get_multiplier(&rest).unwrap_or(1);
+    if !rest.is_empty() && rest.starts_with("*") {
+        multiplier = get_multiplier(rest).unwrap_or(1);
         rest = &rest[(1 + multiplier.to_string().len() + 1).min(rest.len())..]
-    } else if rest.len() > 0 {
+    } else if !rest.is_empty() {
         rest = &rest[1..]
     }
 
     let mut sibling = None;
 
-    if rest.len() > 0 {
-        let scoped_sibling = parse_input(&rest, level);
+    if !rest.is_empty() {
+        let scoped_sibling = parse_input(rest, level);
         if scoped_sibling.is_err() {
             return Err(scoped_sibling.err().unwrap());
         }
         sibling = Some(scoped_sibling.ok().unwrap());
     }
 
-    return Element::new(
+    Element::new(
         None,
         Some(Box::new(parsed_element.ok().unwrap())),
         multiplier,
-        if let Some(sibling) = sibling {
-            Some(Box::new(Node {
+        sibling.map(|sibling| {
+            Box::new(Node {
                 node_type: NodeType::Sibling,
                 node: sibling,
-            }))
-        } else {
-            None
-        },
+            })
+        }),
         level,
-    );
+    )
 }
 
 /// Parses an Glyf abbreviation string into an [`Element`] tree.
@@ -202,7 +200,7 @@ pub fn parse_input(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
 
     let next_element = parse_input(
         &formatted[element.len() + 1..],
-        if &node_type == &NodeType::Children {
+        if node_type == NodeType::Children {
             Some(current_level + 1)
         } else {
             Some(current_level)
@@ -213,7 +211,7 @@ pub fn parse_input(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
         return Err(next_element.err().unwrap());
     }
 
-    return Element::new(
+    Element::new(
         Some(element_value.to_string()),
         None,
         multiplier,
@@ -222,7 +220,7 @@ pub fn parse_input(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
             node_type,
         })),
         level,
-    );
+    )
 }
 
 #[cfg(test)]
