@@ -4,7 +4,7 @@
 //! happens *before* attribute parsing, so `"img"` becomes `"img:src:alt"`
 //! which is then split into identifier `img` and attributes `:src :alt`.
 
-use crate::config::Config;
+use std::collections::HashMap;
 
 const SNIPPET_BOUNDARIES: &[char] = &[':', '.', '#', '>', '+', '*', '<', '/'];
 
@@ -26,10 +26,8 @@ const SNIPPET_BOUNDARIES: &[char] = &[':', '.', '#', '>', '+', '*', '<', '/'];
 /// // "div" → "div"  (no snippet, returned as-is)
 /// // "a:id=main" → "a:href:id=main" (extra attrs appended after expansion)
 /// ```
-pub(super) fn parse_snippet(value: &str) -> String {
+pub(super) fn parse_snippet(value: &str, snippets: &HashMap<String, String>) -> String {
     let mut transformed_value = String::from(value);
-    let config = &Config::get();
-    let snippets = &config.snippets;
 
     let matching_key = snippets
         .keys()
@@ -53,96 +51,88 @@ pub(super) fn parse_snippet(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn s(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
 
     // -------------------------------------------------------------------------
     // parse_snippet
     // -------------------------------------------------------------------------
     mod parse_snippet_tests {
-        use std::collections::HashMap;
-
-        use crate::config::ParserMode;
-
         use super::*;
 
-        fn init_config() {
-            Config::init(
-                ParserMode::HTML,
-                HashMap::from([
-                    ("a".to_string(), "a:href".to_string()),
-                    ("br".to_string(), "br/".to_string()),
-                    ("hr".to_string(), "hr/".to_string()),
-                    ("img".to_string(), "img:src:alt".to_string()),
-                    ("btn".to_string(), "button".to_string()),
-                    ("bq".to_string(), "blockquote".to_string()),
-                    (
-                        "a:blank".to_string(),
-                        "a:href=${0}:target=_blank:rel=noopener noreferrer".to_string(),
-                    ),
-                    ("input".to_string(), "input/".to_string()),
-                ]),
-            );
-        }
         #[test]
         fn unknown_tag_is_returned_unchanged() {
-            init_config();
-            assert_eq!(parse_snippet("div"), "div");
-            assert_eq!(parse_snippet("section"), "section");
+            let snips = s(&[]);
+            assert_eq!(parse_snippet("div", &snips), "div");
+            assert_eq!(parse_snippet("section", &snips), "section");
         }
 
         #[test]
         fn expands_anchor_shorthand() {
-            init_config();
-            assert_eq!(parse_snippet("a"), "a:href");
+            let snips = s(&[("a", "a:href")]);
+            assert_eq!(parse_snippet("a", &snips), "a:href");
         }
 
         #[test]
         fn expands_self_closing_tag() {
-            init_config();
-            assert_eq!(parse_snippet("br"), "br/");
-            assert_eq!(parse_snippet("hr"), "hr/");
+            let snips = s(&[("br", "br/"), ("hr", "hr/")]);
+            assert_eq!(parse_snippet("br", &snips), "br/");
+            assert_eq!(parse_snippet("hr", &snips), "hr/");
         }
 
         #[test]
         fn expands_img_shorthand() {
-            init_config();
-            assert_eq!(parse_snippet("img"), "img:src:alt");
+            let snips = s(&[("img", "img:src:alt")]);
+            assert_eq!(parse_snippet("img", &snips), "img:src:alt");
         }
 
         #[test]
         fn expands_btn_alias() {
-            init_config();
-            assert_eq!(parse_snippet("btn"), "button");
+            let snips = s(&[("btn", "button")]);
+            assert_eq!(parse_snippet("btn", &snips), "button");
         }
 
         #[test]
         fn expands_bq_alias() {
-            init_config();
-            assert_eq!(parse_snippet("bq"), "blockquote");
+            let snips = s(&[("bq", "blockquote")]);
+            assert_eq!(parse_snippet("bq", &snips), "blockquote");
         }
 
         #[test]
         fn longer_key_wins_over_shorter_prefix() {
-            init_config();
             // both "a" and "a:blank" match — "a:blank" is longer
+            let snips = s(&[
+                ("a", "a:href"),
+                (
+                    "a:blank",
+                    "a:href=${0}:target=_blank:rel=noopener noreferrer",
+                ),
+            ]);
             assert_eq!(
-                parse_snippet("a:blank"),
+                parse_snippet("a:blank", &snips),
                 "a:href=${0}:target=_blank:rel=noopener noreferrer"
             );
         }
 
         #[test]
         fn appends_extra_attributes_after_snippet_expansion() {
-            init_config();
             // "a" expands to "a:href"; extra ":id=main" is appended
-            assert_eq!(parse_snippet("a:id=main"), "a:href:id=main");
+            let snips = s(&[("a", "a:href")]);
+            assert_eq!(parse_snippet("a:id=main", &snips), "a:href:id=main");
         }
 
         #[test]
         fn no_expansion_when_rest_is_not_colon_prefixed() {
-            init_config();
             // "input" snippet only matches when followed by nothing or ':'
             // "inputxyz" is NOT a valid snippet call (rest = "xyz", no ':')
-            assert_eq!(parse_snippet("inputxyz"), "inputxyz");
+            let snips = s(&[("input", "input/")]);
+            assert_eq!(parse_snippet("inputxyz", &snips), "inputxyz");
         }
     }
 }

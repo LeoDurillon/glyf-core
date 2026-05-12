@@ -25,7 +25,7 @@ ul>li.item*3
 
 ```toml
 [dependencies]
-glyf-core = "0.2"
+glyf-core = "0.2.1"
 ```
 
 ---
@@ -121,22 +121,6 @@ expand("card", None, Some(config));
 // </div>
 ```
 
-Alternatively, call `Config::init` once at startup and pass `None` for every
-subsequent `expand` call:
-
-```rust
-use std::collections::HashMap;
-use glyf_core::config::{Config, ParserMode};
-use glyf_core::expand;
-
-Config::init(
-    ParserMode::HTML,
-    HashMap::from([("btn".to_string(), "MyButton".to_string())]),
-);
-
-expand("btn", None, None);   // <MyButton></MyButton>
-expand("div", None, None);   // <div></div>
-```
 
 ### Working with the AST
 
@@ -146,8 +130,9 @@ If you need the parsed tree rather than a rendered string, use
 
 ```rust
 use glyf_core::parser::parse_input;
+use glyf_core::config::Config;
 
-let element = parse_input("ul>li*3", None).unwrap();
+let element = parse_input("ul>li*3", None, &Config::default()).unwrap();
 
 println!("tag:        {:?}", element.identifier);
 println!("multiplier: {}", element.multiplier);

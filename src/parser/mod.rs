@@ -25,9 +25,10 @@
 //!
 //! ```
 //! use glyf_core::parser::parse_input;
+//! use glyf_core::config::Config;
 //!
 //! assert_eq!(
-//!     parse_input("ul>li.item*2", None).unwrap().to_string(),
+//!     parse_input("ul>li.item*2", None, &Config::default()).unwrap().to_string(),
 //!     "<ul>\n\t<li class=\"item\"></li>\n\t<li class=\"item\"></li>\n</ul>"
 //! );
 //! ```
@@ -41,6 +42,8 @@ mod utils;
 pub use error::GlyfError;
 pub use types::{Element, Node, NodeType};
 use utils::{find_at_depth_zero, get_multiplier};
+
+use crate::config::Config;
 
 const IMPLICIT_DIV_PREFIXES: [char; 4] = [':', '.', '#', '>'];
 
@@ -56,21 +59,26 @@ const IMPLICIT_DIV_PREFIXES: [char; 4] = [':', '.', '#', '>'];
 /// # Examples
 /// ```
 /// use glyf_core::parser::parse_group;
+/// use glyf_core::config::Config;
 ///
 /// // (div)*3 — three divs at root level
-/// let s = parse_group("(div)*3", None).unwrap().to_string();
+/// let s = parse_group("(div)*3", None, &Config::default()).unwrap().to_string();
 /// assert_eq!(s, "<div></div>\n<div></div>\n<div></div>");
 ///
 /// // (ul>li)+p — group followed by a sibling
-/// let s = parse_group("(ul>li)+p", None).unwrap().to_string();
+/// let s = parse_group("(ul>li)+p", None, &Config::default()).unwrap().to_string();
 /// assert_eq!(s, "<ul>\n\t<li></li>\n</ul>\n<p></p>");
 /// ```
-pub fn parse_group(input: &str, level: Option<usize>) -> Result<Element, GlyfError> {
+pub fn parse_group(
+    input: &str,
+    level: Option<usize>,
+    config: &Config,
+) -> Result<Element, GlyfError> {
     let closing = find_at_depth_zero(&input[1..], ')').unwrap_or(input.len() - 1);
     let inner = &input[1..];
     let element = &inner[..closing];
     let mut rest = &inner[(closing + 1).min(input.len())..];
-    let parsed_element = parse_input(element, level);
+    let parsed_element = parse_input(element, level, config);
 
     if parsed_element.is_err() {
         return Err(parsed_element.err().unwrap());
@@ -88,7 +96,7 @@ pub fn parse_group(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
     let mut sibling = None;
 
     if !rest.is_empty() {
-        let scoped_sibling = parse_input(rest, level);
+        let scoped_sibling = parse_input(rest, level, config);
         if scoped_sibling.is_err() {
             return Err(scoped_sibling.err().unwrap());
         }
@@ -106,6 +114,7 @@ pub fn parse_group(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
             })
         }),
         level,
+        config,
     )
 }
 
@@ -124,34 +133,37 @@ pub fn parse_group(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
 /// # Examples
 /// ```
 /// use glyf_core::parser::parse_input;
-/// use glyf_core::config::{ParserMode,Config};
-/// use std::collections::HashMap;
+/// use glyf_core::config::{ParserMode, Config};
 ///
 /// // Simple element
-/// assert_eq!(parse_input("div", None).unwrap().to_string(), "<div></div>");
+/// assert_eq!(parse_input("div", None, &Config::default()).unwrap().to_string(), "<div></div>");
 ///
 /// // Nested children with indentation
 /// assert_eq!(
-///     parse_input("ul>li", None).unwrap().to_string(),
+///     parse_input("ul>li", None, &Config::default()).unwrap().to_string(),
 ///     "<ul>\n\t<li></li>\n</ul>"
 /// );
 ///
 /// // Implicit div — leading '.' triggers div wrapper
 /// assert_eq!(
-///     parse_input(".card", None).unwrap().to_string(),
+///     parse_input(".card", None, &Config::default()).unwrap().to_string(),
 ///     "<div class=\"card\"></div>"
 /// );
 ///
 /// // JSX fragment — 'e' is recognised directly in JSX mode (no snippet needed)
-/// Config::init(ParserMode::JSX, HashMap::new());
+/// let jsx = Config::new(ParserMode::JSX, std::collections::HashMap::new());
 /// assert_eq!(
-///     parse_input("e>p", None).unwrap().to_string(),
+///     parse_input("e>p", None, &jsx).unwrap().to_string(),
 ///     "<>\n\t<p></p>\n</>"
 /// );
 /// ```
-pub fn parse_input(input: &str, level: Option<usize>) -> Result<Element, GlyfError> {
+pub fn parse_input(
+    input: &str,
+    level: Option<usize>,
+    config: &Config,
+) -> Result<Element, GlyfError> {
     if input.starts_with("(") {
-        return parse_group(input, level);
+        return parse_group(input, level, config);
     }
 
     let formatted = if input.starts_with(IMPLICIT_DIV_PREFIXES.as_slice()) {
@@ -187,6 +199,7 @@ pub fn parse_input(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
             multiplier,
             None,
             level,
+            config,
         );
     }
 
@@ -204,6 +217,7 @@ pub fn parse_input(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
         } else {
             Some(current_level)
         },
+        config,
     );
 
     if next_element.is_err() {
@@ -219,6 +233,7 @@ pub fn parse_input(input: &str, level: Option<usize>) -> Result<Element, GlyfErr
             node_type,
         })),
         level,
+        config,
     )
 }
 
@@ -230,12 +245,12 @@ mod tests {
 
     use super::*;
 
-    fn init_jsx_config() -> crate::config::TestConfigGuard {
-        Config::for_test(ParserMode::JSX, HashMap::new())
+    fn jsx_config() -> Config {
+        Config::new(ParserMode::JSX, HashMap::new())
     }
 
-    fn init_config(snippets_list: &[(&str, &str)]) -> crate::config::TestConfigGuard {
-        Config::for_test(ParserMode::HTML, snippets(snippets_list))
+    fn html_config(snippets_list: &[(&str, &str)]) -> Config {
+        Config::new(ParserMode::HTML, snippets(snippets_list))
     }
     /// Convenience: build a `HashMap<String, String>` from literal pairs.
     fn snippets(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -260,7 +275,7 @@ mod tests {
 
         #[test]
         fn single_element() {
-            let r = ok(parse_input("div", None));
+            let r = ok(parse_input("div", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             assert_eq!(r.multiplier, 1);
             assert!(r.node.is_none());
@@ -269,7 +284,7 @@ mod tests {
 
         #[test]
         fn element_with_multiplier_strips_star_n() {
-            let r = ok(parse_input("div*3", None));
+            let r = ok(parse_input("div*3", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div")); // NOT "div*3"
             assert_eq!(r.multiplier, 3);
             assert!(r.node.is_none());
@@ -277,7 +292,7 @@ mod tests {
 
         #[test]
         fn element_with_child_operator() {
-            let r = ok(parse_input("div>p", None));
+            let r = ok(parse_input("div>p", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let node = r.node.expect("should have a node");
             assert!(matches!(node.node_type, NodeType::Children));
@@ -287,7 +302,7 @@ mod tests {
 
         #[test]
         fn element_with_sibling_operator() {
-            let r = ok(parse_input("div+p", None));
+            let r = ok(parse_input("div+p", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let node = r.node.expect("should have a node");
             assert!(matches!(node.node_type, NodeType::Sibling));
@@ -297,7 +312,7 @@ mod tests {
         #[test]
         fn child_beats_sibling_when_appearing_first() {
             // '>' at 3, '+' at 5 -> Children wins at the top level
-            let r = ok(parse_input("div>p+span", None));
+            let r = ok(parse_input("div>p+span", None, &Config::default()));
             let node = r.node.expect("div should have a child node");
             assert!(matches!(node.node_type, NodeType::Children));
             assert_eq!(node.node.identifier.as_deref(), Some("p"));
@@ -309,7 +324,7 @@ mod tests {
         #[test]
         fn sibling_beats_child_when_appearing_first() {
             // '+' at 3, '>' at 5 -> Sibling wins at the top level
-            let r = ok(parse_input("div+p>span", None));
+            let r = ok(parse_input("div+p>span", None, &Config::default()));
             let node = r.node.expect("div should have sibling node");
             assert!(matches!(node.node_type, NodeType::Sibling));
             assert_eq!(node.node.identifier.as_deref(), Some("p"));
@@ -317,7 +332,7 @@ mod tests {
 
         #[test]
         fn chained_children_build_nested_tree() {
-            let r = ok(parse_input("ul>li>a", None));
+            let r = ok(parse_input("ul>li>a", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("ul"));
             let li = r.node.expect("ul -> li");
             assert!(matches!(li.node_type, NodeType::Children));
@@ -329,7 +344,7 @@ mod tests {
 
         #[test]
         fn multiplier_with_child() {
-            let r = ok(parse_input("li*3>a", None));
+            let r = ok(parse_input("li*3>a", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("li"));
             assert_eq!(r.multiplier, 3);
             let node = r.node.expect("li -> a");
@@ -339,7 +354,7 @@ mod tests {
 
         #[test]
         fn group_input_is_delegated_to_parse_group() {
-            let r = ok(parse_input("(div)+span", None));
+            let r = ok(parse_input("(div)+span", None, &Config::default()));
             assert!(r.identifier.is_none());
             assert!(r.group.is_some());
         }
@@ -348,13 +363,13 @@ mod tests {
 
         #[test]
         fn top_level_element_gets_given_level() {
-            let r = ok(parse_input("div", Some(2)));
+            let r = ok(parse_input("div", Some(2), &Config::default()));
             assert_eq!(r.level, Some(2));
         }
 
         #[test]
         fn child_gets_level_plus_one() {
-            let r = ok(parse_input("div>p", Some(0)));
+            let r = ok(parse_input("div>p", Some(0), &Config::default()));
             assert_eq!(r.level, Some(0)); // div at level 0
             let child = r.node.expect("div -> p");
             assert_eq!(child.node.level, Some(1)); // p at level 1
@@ -362,7 +377,7 @@ mod tests {
 
         #[test]
         fn sibling_keeps_same_level() {
-            let r = ok(parse_input("div+p", Some(3)));
+            let r = ok(parse_input("div+p", Some(3), &Config::default()));
             assert_eq!(r.level, Some(3)); // div at level 3
             let sibling = r.node.expect("div + p");
             assert_eq!(sibling.node.level, Some(3)); // p also at level 3
@@ -371,7 +386,7 @@ mod tests {
         #[test]
         fn level_accumulates_through_nested_children() {
             // div(0) > ul(1) > li(2)
-            let r = ok(parse_input("div>ul>li", Some(0)));
+            let r = ok(parse_input("div>ul>li", Some(0), &Config::default()));
             let ul = r.node.expect("div -> ul");
             assert_eq!(ul.node.level, Some(1));
             let li = ul.node.node.expect("ul -> li");
@@ -381,8 +396,8 @@ mod tests {
         #[test]
         fn element_with_snippet_expansion() {
             // "a" expands to "a:href" -> identifier="a", href prop present
-            let _guard = init_config(&[("a", "a:href")]);
-            let r = ok(parse_input("a", None));
+            let config = html_config(&[("a", "a:href")]);
+            let r = ok(parse_input("a", None, &config));
             assert_eq!(r.identifier.as_deref(), Some("a"));
             let attrs = r.attributes.expect("a should have href attribute");
             assert_eq!(attrs[0].identifier, "href");
@@ -390,7 +405,7 @@ mod tests {
 
         #[test]
         fn element_with_class_in_abbreviation() {
-            let r = ok(parse_input("div.container", None));
+            let r = ok(parse_input("div.container", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attrs = r.attributes.expect("should have class attr");
             assert_eq!(attrs[0].identifier, "container");
@@ -401,7 +416,7 @@ mod tests {
 
         #[test]
         fn implicit_div_class_yields_div_identifier() {
-            let r = ok(parse_input(".foo", None));
+            let r = ok(parse_input(".foo", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attrs = r.attributes.expect("should have class attr");
             assert_eq!(attrs[0].identifier, "foo");
@@ -410,7 +425,7 @@ mod tests {
 
         #[test]
         fn implicit_div_id_yields_div_identifier() {
-            let r = ok(parse_input("#main", None));
+            let r = ok(parse_input("#main", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attrs = r.attributes.expect("should have id attr");
             assert!(matches!(attrs[0].attribute_type, AttributeType::Id));
@@ -419,7 +434,7 @@ mod tests {
 
         #[test]
         fn implicit_div_prop_yields_div_identifier() {
-            let r = ok(parse_input(":disabled", None));
+            let r = ok(parse_input(":disabled", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attrs = r.attributes.expect("should have prop attr");
             assert_eq!(attrs[0].identifier, "disabled");
@@ -428,7 +443,7 @@ mod tests {
 
         #[test]
         fn implicit_div_child_operator_yields_div_with_child() {
-            let r = ok(parse_input(">p", None));
+            let r = ok(parse_input(">p", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let node = r.node.expect(">p should produce div -> p");
             assert!(matches!(node.node_type, NodeType::Children));
@@ -437,21 +452,20 @@ mod tests {
 
         #[test]
         fn empty_input_returns_err() {
-            assert!(parse_input("", None,).is_err());
+            assert!(parse_input("", None, &Config::default()).is_err());
         }
 
         #[test]
         fn bare_child_operator_returns_err() {
             // ">" prepends div, but then the child is empty string -> NoIdentifier
-            assert!(parse_input(">", None,).is_err());
+            assert!(parse_input(">", None, &Config::default()).is_err());
         }
 
         // ── fragment (e snippet) ────────────────────────────────────
 
         #[test]
         fn fragment_has_empty_identifier() {
-            let _guard = init_jsx_config();
-            let r = ok(parse_input("e", None));
+            let r = ok(parse_input("e", None, &jsx_config()));
             assert_eq!(r.identifier.as_deref(), Some(""));
             assert!(!r.self_closing);
             assert!(r.attributes.is_none());
@@ -460,8 +474,7 @@ mod tests {
 
         #[test]
         fn fragment_with_child_has_children_node() {
-            let _guard = init_jsx_config();
-            let r = ok(parse_input("e>div", None));
+            let r = ok(parse_input("e>div", None, &jsx_config()));
             assert_eq!(r.identifier.as_deref(), Some(""));
             let node = r.node.expect("fragment should have child");
             assert!(matches!(node.node_type, NodeType::Children));
@@ -470,8 +483,7 @@ mod tests {
 
         #[test]
         fn fragment_with_sibling_has_sibling_node() {
-            let _guard = init_jsx_config();
-            let r = ok(parse_input("e+p", None));
+            let r = ok(parse_input("e+p", None, &jsx_config()));
             assert_eq!(r.identifier.as_deref(), Some(""));
             let node = r.node.expect("fragment should have sibling");
             assert!(matches!(node.node_type, NodeType::Sibling));
@@ -487,7 +499,7 @@ mod tests {
 
         #[test]
         fn simple_group_no_suffix() {
-            let r = ok(parse_group("(div)", None));
+            let r = ok(parse_group("(div)", None, &Config::default()));
             assert!(r.identifier.is_none());
             assert_eq!(r.multiplier, 1);
             assert!(r.node.is_none());
@@ -497,21 +509,21 @@ mod tests {
 
         #[test]
         fn group_with_multiplier_only() {
-            let r = ok(parse_group("(div)*3", None));
+            let r = ok(parse_group("(div)*3", None, &Config::default()));
             assert_eq!(r.multiplier, 3);
             assert!(r.node.is_none());
         }
 
         #[test]
         fn multi_digit_multiplier() {
-            let r = ok(parse_group("(li)*10", None));
+            let r = ok(parse_group("(li)*10", None, &Config::default()));
             assert_eq!(r.multiplier, 10);
             assert!(r.node.is_none());
         }
 
         #[test]
         fn group_with_sibling_no_multiplier() {
-            let r = ok(parse_group("(div)+span", None));
+            let r = ok(parse_group("(div)+span", None, &Config::default()));
             assert_eq!(r.multiplier, 1);
             let node = r.node.expect("should have a sibling node");
             assert!(matches!(node.node_type, NodeType::Sibling));
@@ -520,7 +532,7 @@ mod tests {
 
         #[test]
         fn group_with_multiplier_and_sibling() {
-            let r = ok(parse_group("(div)*3+span", None));
+            let r = ok(parse_group("(div)*3+span", None, &Config::default()));
             assert_eq!(r.multiplier, 3);
             let node = r.node.expect("should have a sibling node");
             assert!(matches!(node.node_type, NodeType::Sibling));
@@ -529,7 +541,7 @@ mod tests {
 
         #[test]
         fn group_inner_content_recursively_parsed() {
-            let r = ok(parse_group("(ul>li)", None));
+            let r = ok(parse_group("(ul>li)", None, &Config::default()));
             let inner = r.group.expect("group content should exist");
             assert_eq!(inner.identifier.as_deref(), Some("ul"));
             let child = inner.node.expect("ul should have child li");
@@ -539,7 +551,7 @@ mod tests {
 
         #[test]
         fn sibling_chain_after_group() {
-            let r = ok(parse_group("(div)+p+span", None));
+            let r = ok(parse_group("(div)+p+span", None, &Config::default()));
             let first = r.node.expect("should have first sibling");
             assert!(matches!(first.node_type, NodeType::Sibling));
             assert_eq!(first.node.identifier.as_deref(), Some("p"));
@@ -550,7 +562,7 @@ mod tests {
 
         #[test]
         fn nested_group_in_inner_content() {
-            let r = ok(parse_group("((div>p)+span)", None));
+            let r = ok(parse_group("((div>p)+span)", None, &Config::default()));
             let inner = r.group.expect("outer group content should exist");
             assert!(inner.group.is_some(), "inner content should be a group");
         }
@@ -558,7 +570,7 @@ mod tests {
         #[test]
         fn group_level_is_passed_to_inner_content() {
             // level given to parse_group is given to the inner Element tree
-            let r = ok(parse_group("(div>p)", Some(1)));
+            let r = ok(parse_group("(div>p)", Some(1), &Config::default()));
             let inner = r.group.expect("group should exist");
             assert_eq!(inner.level, Some(1)); // div gets level 1
             let child = inner.node.expect("div -> p");
@@ -567,9 +579,9 @@ mod tests {
 
         #[test]
         fn group_with_snippet_inside() {
-            let _guard = init_config(&[("a", "a:href")]);
+            let config = html_config(&[("a", "a:href")]);
             // "a" snippet should expand inside the group too
-            let r = ok(parse_group("(a)+div", None));
+            let r = ok(parse_group("(a)+div", None, &config));
             let inner = r.group.expect("group should exist");
             assert_eq!(inner.identifier.as_deref(), Some("a"));
             // "a" expands to "a:href" -> should have href attribute
@@ -585,26 +597,29 @@ mod tests {
 
         use std::collections::HashMap;
 
-        fn init_jsx_config() -> crate::config::TestConfigGuard {
-            Config::for_test(ParserMode::JSX, HashMap::new())
+        fn jsx_config() -> Config {
+            Config::new(ParserMode::JSX, HashMap::new())
         }
 
         #[test]
         fn simple_element() {
-            assert_eq!(ok(parse_input("div", None,)).to_string(), "<div></div>");
+            assert_eq!(
+                ok(parse_input("div", None, &Config::default())).to_string(),
+                "<div></div>"
+            );
         }
 
         #[test]
         fn self_closing_via_snippet() {
-            let _guard = init_config(&[("br", "br/")]);
+            let config = html_config(&[("br", "br/")]);
             // "br" expands to "br/" via snippet -> self_closing = true
-            assert_eq!(ok(parse_input("br", None,)).to_string(), "<br />");
+            assert_eq!(ok(parse_input("br", None, &config)).to_string(), "<br />");
         }
 
         #[test]
         fn element_with_single_class() {
             assert_eq!(
-                ok(parse_input("div.container", None,)).to_string(),
+                ok(parse_input("div.container", None, &Config::default())).to_string(),
                 "<div class=\"container\"></div>"
             );
         }
@@ -612,7 +627,12 @@ mod tests {
         #[test]
         fn element_with_multiple_classes_preserves_order() {
             assert_eq!(
-                ok(parse_input("div.flex.items-center", None,)).to_string(),
+                ok(parse_input(
+                    "div.flex.items-center",
+                    None,
+                    &Config::default()
+                ))
+                .to_string(),
                 "<div class=\"flex items-center\"></div>"
             );
         }
@@ -620,7 +640,7 @@ mod tests {
         #[test]
         fn element_with_id() {
             assert_eq!(
-                ok(parse_input("div#main", None,)).to_string(),
+                ok(parse_input("div#main", None, &Config::default())).to_string(),
                 "<div id=\"main\"></div>"
             );
         }
@@ -628,16 +648,15 @@ mod tests {
         #[test]
         fn element_with_plain_prop_value_is_quoted() {
             assert_eq!(
-                ok(parse_input("div:role=main", None,)).to_string(),
+                ok(parse_input("div:role=main", None, &Config::default())).to_string(),
                 "<div role=\"main\"></div>"
             );
         }
 
         #[test]
         fn element_with_jsx_prop_value_is_not_quoted() {
-            let _guard = Config::for_test(ParserMode::JSX, Default::default());
             assert_eq!(
-                ok(parse_input("div:onClick={handler}", None,)).to_string(),
+                ok(parse_input("div:onClick={handler}", None, &jsx_config())).to_string(),
                 "<div onClick={handler}></div>"
             );
         }
@@ -645,7 +664,7 @@ mod tests {
         #[test]
         fn element_with_text_content() {
             assert_eq!(
-                ok(parse_input("div<Hello", None,)).to_string(),
+                ok(parse_input("div<Hello", None, &Config::default())).to_string(),
                 "<div>Hello</div>"
             );
         }
@@ -653,7 +672,7 @@ mod tests {
         #[test]
         fn element_with_child_indents_one_level() {
             assert_eq!(
-                ok(parse_input("div>p", None,)).to_string(),
+                ok(parse_input("div>p", None, &Config::default())).to_string(),
                 "<div>\n\t<p></p>\n</div>"
             );
         }
@@ -661,7 +680,7 @@ mod tests {
         #[test]
         fn siblings_at_root_separated_by_newline() {
             assert_eq!(
-                ok(parse_input("div+p", None,)).to_string(),
+                ok(parse_input("div+p", None, &Config::default())).to_string(),
                 "<div></div>\n<p></p>"
             );
         }
@@ -669,7 +688,7 @@ mod tests {
         #[test]
         fn siblings_at_indented_level_carry_newline_prefix() {
             assert_eq!(
-                ok(parse_input("div+p", Some(1),)).to_string(),
+                ok(parse_input("div+p", Some(1), &Config::default())).to_string(),
                 "\n\t<div></div>\n\t<p></p>"
             );
         }
@@ -677,7 +696,7 @@ mod tests {
         #[test]
         fn multiplied_element_at_root_separated_by_newline() {
             assert_eq!(
-                ok(parse_input("li*3", None,)).to_string(),
+                ok(parse_input("li*3", None, &Config::default())).to_string(),
                 "<li></li>\n<li></li>\n<li></li>"
             );
         }
@@ -686,16 +705,16 @@ mod tests {
         fn multiplied_element_at_indented_level_uses_embedded_prefix() {
             // the \n\t is part of each repeated value, so join("") gives correct output
             assert_eq!(
-                ok(parse_input("li*3", Some(1),)).to_string(),
+                ok(parse_input("li*3", Some(1), &Config::default())).to_string(),
                 "\n\t<li></li>\n\t<li></li>\n\t<li></li>"
             );
         }
 
         #[test]
         fn nested_children_indent_accumulates() {
-            let _guard = init_config(&[("a", "a:href")]);
+            let config = html_config(&[("a", "a:href")]);
             assert_eq!(
-                ok(parse_input("ul>li>a", None,)).to_string(),
+                ok(parse_input("ul>li>a", None, &config)).to_string(),
                 "<ul>\n\t<li>\n\t\t<a href></a>\n\t</li>\n</ul>"
             );
         }
@@ -704,22 +723,30 @@ mod tests {
         fn attributes_are_sorted_id_then_props_then_class() {
             // AttributeType order: Id(0) < Props(1) < Class(2)
             assert_eq!(
-                ok(parse_input("div.foo#bar:disabled", None,)).to_string(),
+                ok(parse_input(
+                    "div.foo#bar:disabled",
+                    None,
+                    &Config::default()
+                ))
+                .to_string(),
                 "<div id=\"bar\" disabled class=\"foo\"></div>"
             );
         }
 
         #[test]
         fn snippet_expansion_included_in_output() {
-            let _guard = init_config(&[("a", "a:href")]);
+            let config = html_config(&[("a", "a:href")]);
             // "a" -> "a:href" -> href boolean attr in output
-            assert_eq!(ok(parse_input("a", None,)).to_string(), "<a href></a>");
+            assert_eq!(
+                ok(parse_input("a", None, &config)).to_string(),
+                "<a href></a>"
+            );
         }
 
         #[test]
         fn group_renders_inner_element() {
             assert_eq!(
-                ok(parse_group("(div)+span", None,)).to_string(),
+                ok(parse_group("(div)+span", None, &Config::default())).to_string(),
                 "<div></div>\n<span></span>"
             );
         }
@@ -727,7 +754,7 @@ mod tests {
         #[test]
         fn group_with_multiplier_at_root_separated_by_newline() {
             assert_eq!(
-                ok(parse_group("(li)*3", None,)).to_string(),
+                ok(parse_group("(li)*3", None, &Config::default())).to_string(),
                 "<li></li>\n<li></li>\n<li></li>"
             );
         }
@@ -735,7 +762,7 @@ mod tests {
         #[test]
         fn group_with_multiplier_at_indented_level() {
             assert_eq!(
-                ok(parse_group("(li)*3", Some(1),)).to_string(),
+                ok(parse_group("(li)*3", Some(1), &Config::default())).to_string(),
                 "\n\t<li></li>\n\t<li></li>\n\t<li></li>"
             );
         }
@@ -743,37 +770,39 @@ mod tests {
         #[test]
         fn multiplied_children_inside_parent() {
             assert_eq!(
-                ok(parse_input("ul>li*3", None,)).to_string(),
+                ok(parse_input("ul>li*3", None, &Config::default())).to_string(),
                 "<ul>\n\t<li></li>\n\t<li></li>\n\t<li></li>\n</ul>"
             );
         }
 
         #[test]
         fn fragments() {
-            let _guard = init_jsx_config();
-            assert_eq!(ok(parse_input("e", None,)).to_string(), "<></>");
+            assert_eq!(
+                ok(parse_input("e", None, &jsx_config())).to_string(),
+                "<></>"
+            );
         }
 
         #[test]
         fn fragment_with_child() {
-            let _guard = init_jsx_config();
             assert_eq!(
-                ok(parse_input("e>div", None,)).to_string(),
+                ok(parse_input("e>div", None, &jsx_config())).to_string(),
                 "<>\n\t<div></div>\n</>"
             );
         }
 
         #[test]
         fn fragment_with_sibling() {
-            let _guard = init_jsx_config();
-            assert_eq!(ok(parse_input("e+p", None,)).to_string(), "<></>\n<p></p>");
+            assert_eq!(
+                ok(parse_input("e+p", None, &jsx_config())).to_string(),
+                "<></>\n<p></p>"
+            );
         }
 
         #[test]
         fn fragment_multiplied() {
-            let _guard = init_jsx_config();
             assert_eq!(
-                ok(parse_input("e*3", None,)).to_string(),
+                ok(parse_input("e*3", None, &jsx_config())).to_string(),
                 "<></>\n<></>\n<></>"
             );
         }
@@ -783,7 +812,7 @@ mod tests {
         #[test]
         fn implicit_div_from_class() {
             assert_eq!(
-                ok(parse_input(".container", None,)).to_string(),
+                ok(parse_input(".container", None, &Config::default())).to_string(),
                 "<div class=\"container\"></div>"
             );
         }
@@ -791,7 +820,7 @@ mod tests {
         #[test]
         fn implicit_div_from_id() {
             assert_eq!(
-                ok(parse_input("#main", None,)).to_string(),
+                ok(parse_input("#main", None, &Config::default())).to_string(),
                 "<div id=\"main\"></div>"
             );
         }
@@ -799,7 +828,7 @@ mod tests {
         #[test]
         fn implicit_div_from_prop() {
             assert_eq!(
-                ok(parse_input(":disabled", None,)).to_string(),
+                ok(parse_input(":disabled", None, &Config::default())).to_string(),
                 "<div disabled></div>"
             );
         }
@@ -807,7 +836,7 @@ mod tests {
         #[test]
         fn implicit_div_from_child_operator() {
             assert_eq!(
-                ok(parse_input(">p", None,)).to_string(),
+                ok(parse_input(">p", None, &Config::default())).to_string(),
                 "<div>\n\t<p></p>\n</div>"
             );
         }
@@ -815,7 +844,7 @@ mod tests {
         #[test]
         fn implicit_div_class_with_own_child() {
             assert_eq!(
-                ok(parse_input(".foo>p", None,)).to_string(),
+                ok(parse_input(".foo>p", None, &Config::default())).to_string(),
                 "<div class=\"foo\">\n\t<p></p>\n</div>"
             );
         }
@@ -824,7 +853,7 @@ mod tests {
         fn implicit_div_class_with_implicit_div_sibling() {
             // .foo+.bar -> both become divs, separated by newline
             assert_eq!(
-                ok(parse_input(".foo+.bar", None,)).to_string(),
+                ok(parse_input(".foo+.bar", None, &Config::default())).to_string(),
                 "<div class=\"foo\"></div>\n<div class=\"bar\"></div>"
             );
         }
@@ -841,24 +870,24 @@ mod tests {
         #[test]
         fn custom_alias_resolves_to_identifier() {
             // "mc" is not a built-in; the custom map expands it to "MyComponent"
-            let _guard = init_config(&[("mc", "MyComponent")]);
-            let r = ok(parse_input("mc", None));
+            let config = html_config(&[("mc", "MyComponent")]);
+            let r = ok(parse_input("mc", None, &config));
             assert_eq!(r.identifier.as_deref(), Some("MyComponent"));
         }
 
         #[test]
         fn custom_overrides_builtin_identifier() {
             // built-in "btn" → "button"; custom entry shadows it with "MyButton"
-            let _guard = init_config(&[("btn", "MyButton")]);
-            let r = ok(parse_input("btn", None));
+            let config = html_config(&[("btn", "MyButton")]);
+            let r = ok(parse_input("btn", None, &config));
             assert_eq!(r.identifier.as_deref(), Some("MyButton"));
         }
 
         #[test]
         fn custom_self_closing_snippet() {
             // expansion ending with "/" must set self_closing = true
-            let _guard = init_config(&[("myimg", "MyImage/")]);
-            let r = ok(parse_input("myimg", None));
+            let config = html_config(&[("myimg", "MyImage/")]);
+            let r = ok(parse_input("myimg", None, &config));
             assert_eq!(r.identifier.as_deref(), Some("MyImage"));
             assert!(r.self_closing);
         }
@@ -866,8 +895,8 @@ mod tests {
         #[test]
         fn custom_snippet_with_attributes() {
             // "mc" → "MyComponent:name" → identifier="MyComponent", one Props attr
-            let _guard = init_config(&[("comp", "MyComponent:name")]);
-            let r = ok(parse_input("comp", None));
+            let config = html_config(&[("comp", "MyComponent:name")]);
+            let r = ok(parse_input("comp", None, &config));
             assert_eq!(r.identifier.as_deref(), Some("MyComponent"));
             let attrs = r.attributes.expect("should have name attribute");
             assert_eq!(attrs[0].identifier, "name");
@@ -876,8 +905,8 @@ mod tests {
         #[test]
         fn custom_snippet_propagates_to_child() {
             // custom map must be forwarded when recursively parsing children
-            let _guard = init_config(&[("mc", "MyComponent")]);
-            let r = ok(parse_input("div>mc", None));
+            let config = html_config(&[("mc", "MyComponent")]);
+            let r = ok(parse_input("div>mc", None, &config));
             let child = r.node.expect("div should have child");
             assert_eq!(child.node.identifier.as_deref(), Some("MyComponent"));
         }
@@ -885,8 +914,8 @@ mod tests {
         #[test]
         fn custom_snippet_propagates_to_sibling() {
             // custom map must be forwarded when recursively parsing siblings
-            let _guard = init_config(&[("mc", "MyComponent")]);
-            let r = ok(parse_input("div+mc", None));
+            let config = html_config(&[("mc", "MyComponent")]);
+            let r = ok(parse_input("div+mc", None, &config));
             let sibling = r.node.expect("div should have sibling");
             assert_eq!(sibling.node.identifier.as_deref(), Some("MyComponent"));
         }
@@ -894,8 +923,8 @@ mod tests {
         #[test]
         fn custom_snippet_expands_inside_group() {
             // parse_group must also forward the custom map to its inner content
-            let _guard = init_config(&[("mc", "MyComponent")]);
-            let r = ok(parse_group("(mc)+div", None));
+            let config = html_config(&[("mc", "MyComponent")]);
+            let r = ok(parse_group("(mc)+div", None, &config));
             let inner = r.group.expect("group should contain inner element");
             assert_eq!(inner.identifier.as_deref(), Some("MyComponent"));
         }
@@ -904,9 +933,9 @@ mod tests {
 
         #[test]
         fn custom_alias_renders_as_tag() {
-            let _guard = init_config(&[("mc", "MyComponent")]);
+            let config = html_config(&[("mc", "MyComponent")]);
             assert_eq!(
-                ok(parse_input("mc", None,)).to_string(),
+                ok(parse_input("mc", None, &config)).to_string(),
                 "<MyComponent></MyComponent>"
             );
         }
@@ -914,9 +943,9 @@ mod tests {
         #[test]
         fn custom_self_closing_renders() {
             // expansion "MyImage:src/" → <MyImage src />
-            let _guard = init_config(&[("myimg", "MyImage:src/")]);
+            let config = html_config(&[("myimg", "MyImage:src/")]);
             assert_eq!(
-                ok(parse_input("myimg", None,)).to_string(),
+                ok(parse_input("myimg", None, &config)).to_string(),
                 "<MyImage src />"
             );
         }
@@ -925,32 +954,32 @@ mod tests {
         fn custom_override_produces_different_output_from_builtin() {
             // without custom: "btn" → "button" → <button></button>
             // with custom:    "btn" → "MyButton" → <MyButton></MyButton>
-            let _guard = init_config(&[("btn", "button")]);
+            let config1 = html_config(&[("btn", "button")]);
             assert_eq!(
-                ok(parse_input("btn", None,)).to_string(),
+                ok(parse_input("btn", None, &config1)).to_string(),
                 "<button></button>"
             );
-            let _guard2 = init_config(&[("btn", "MyButton")]);
+            let config2 = html_config(&[("btn", "MyButton")]);
             assert_eq!(
-                ok(parse_input("btn", None,)).to_string(),
+                ok(parse_input("btn", None, &config2)).to_string(),
                 "<MyButton></MyButton>"
             );
         }
 
         #[test]
         fn custom_snippet_child_renders_correctly() {
-            let _guard = init_config(&[("mc", "MyComponent")]);
+            let config = html_config(&[("mc", "MyComponent")]);
             assert_eq!(
-                ok(parse_input("div>mc", None,)).to_string(),
+                ok(parse_input("div>mc", None, &config)).to_string(),
                 "<div>\n\t<MyComponent></MyComponent>\n</div>"
             );
         }
 
         #[test]
         fn custom_snippet_sibling_renders_correctly() {
-            let _guard = init_config(&[("mc", "MyComponent")]);
+            let config = html_config(&[("mc", "MyComponent")]);
             assert_eq!(
-                ok(parse_input("mc+div", None,)).to_string(),
+                ok(parse_input("mc+div", None, &config)).to_string(),
                 "<MyComponent></MyComponent>\n<div></div>"
             );
         }

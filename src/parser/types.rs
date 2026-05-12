@@ -70,6 +70,7 @@ pub struct Element {
     pub node: Option<Box<Node>>,
     /// Indentation depth. `None` or `Some(0)` = root level, `Some(n)` = `n` tabs.
     pub level: Option<usize>,
+    pub mode: ParserMode,
 }
 
 impl Default for Element {
@@ -82,6 +83,7 @@ impl Default for Element {
             multiplier: 1,
             node: None,
             level: None,
+            mode: ParserMode::HTML,
         }
     }
 }
@@ -107,12 +109,13 @@ impl Element {
         multiplier: usize,
         node: Option<Box<Node>>,
         level: Option<usize>,
+        config: &Config,
     ) -> Result<Self, GlyfError> {
-        let mode = Config::get().mode;
+        let mode = config.mode();
         if let Some(value) = &value {
-            let transformed_value = parse_snippet(value);
+            let transformed_value = parse_snippet(value, config.snippets());
             if transformed_value.contains(NODE_IDENTIFIER) {
-                let group = parse_input(&transformed_value, level);
+                let group = parse_input(&transformed_value, level, config);
                 return match group {
                     Err(e) => Err(e),
                     Ok(element) => Ok(Self {
@@ -135,6 +138,7 @@ impl Element {
                     multiplier,
                     node,
                     level,
+                    mode,
                 });
             }
 
@@ -152,6 +156,7 @@ impl Element {
                 } else {
                     transformed_value.len()
                 })],
+                &mode,
             );
             return Ok(Self {
                 identifier: Some(identifier),
@@ -165,6 +170,7 @@ impl Element {
                 multiplier,
                 node,
                 level,
+                mode,
             });
         }
 
@@ -177,13 +183,13 @@ impl Element {
             multiplier,
             node,
             level,
+            mode,
         })
     }
 }
 
 impl Display for Element {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mode = Config::get().mode;
         let mut value = String::new();
         let mut child = String::new();
         let mut sibling = String::new();
@@ -240,7 +246,7 @@ impl Display for Element {
             };
 
             let class_attribute = if !classes.is_empty() {
-                match mode {
+                match self.mode {
                     ParserMode::HTML => format!(" class=\"{}\"", classes),
                     ParserMode::JSX => format!(" className=\"{}\"", classes),
                 }
@@ -281,18 +287,14 @@ impl Display for Element {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-
     use super::*;
 
-    fn init_config(snippets_list: &[(&str, &str)]) -> crate::config::TestConfigGuard {
-        Config::for_test(ParserMode::HTML, snippets(snippets_list))
+    fn html_config(snippets_list: &[(&str, &str)]) -> Config {
+        Config::new(ParserMode::HTML, snippets(snippets_list))
     }
 
     fn snippets(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
     }
 
     // -------------------------------------------------------------------------
@@ -303,7 +305,7 @@ mod tests {
 
         #[test]
         fn simple_identifier() {
-            let e = Element::new(Some("div".into()), None, 1, None, None).unwrap();
+            let e = Element::new(Some("div".into()), None, 1, None, None, &Config::default()).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("div"));
             assert!(!e.self_closing);
             assert!(e.attributes.is_none());
@@ -311,25 +313,23 @@ mod tests {
 
         #[test]
         fn snippet_expands_self_closing_tag() {
-            let _guard = init_config(&[("br", "br/")]);
-            // "br" snippet expands to "br/" -> self_closing = true
-            let e = Element::new(Some("br".into()), None, 1, None, None).unwrap();
+            let config = html_config(&[("br", "br/")]);
+            let e = Element::new(Some("br".into()), None, 1, None, None, &config).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("br"));
             assert!(e.self_closing);
         }
 
         #[test]
         fn explicit_self_closing_slash() {
-            let e = Element::new(Some("Input/".into()), None, 1, None, None).unwrap();
+            let e = Element::new(Some("Input/".into()), None, 1, None, None, &Config::default()).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("Input"));
             assert!(e.self_closing);
         }
 
         #[test]
         fn snippet_expands_and_parses_attributes() {
-            let _guard = init_config(&[("img", "img:src:alt")]);
-            // "img" -> "img:src:alt" -> identifier="img", two Props attrs
-            let e = Element::new(Some("img".into()), None, 1, None, None).unwrap();
+            let config = html_config(&[("img", "img:src:alt")]);
+            let e = Element::new(Some("img".into()), None, 1, None, None, &config).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("img"));
             let attrs = e.attributes.expect("img should have attributes");
             assert_eq!(attrs.len(), 2);
@@ -339,7 +339,7 @@ mod tests {
 
         #[test]
         fn class_attribute_is_parsed() {
-            let e = Element::new(Some("div.container".into()), None, 1, None, None).unwrap();
+            let e = Element::new(Some("div.container".into()), None, 1, None, None, &Config::default()).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("div"));
             let attrs = e.attributes.expect("should have attributes");
             assert_eq!(attrs.len(), 1);
@@ -349,7 +349,7 @@ mod tests {
 
         #[test]
         fn prop_with_value_is_parsed() {
-            let e = Element::new(Some("div:role=main".into()), None, 1, None, None).unwrap();
+            let e = Element::new(Some("div:role=main".into()), None, 1, None, None, &Config::default()).unwrap();
             let attrs = e.attributes.expect("should have attributes");
             assert_eq!(attrs[0].identifier, "role");
             assert_eq!(attrs[0].value.as_deref(), Some("main"));
@@ -357,7 +357,7 @@ mod tests {
 
         #[test]
         fn none_value_produces_group_element() {
-            let e = Element::new(None, None, 1, None, None).unwrap();
+            let e = Element::new(None, None, 1, None, None, &Config::default()).unwrap();
             assert!(e.identifier.is_none());
             assert!(!e.self_closing);
             assert!(e.attributes.is_none());
@@ -365,7 +365,7 @@ mod tests {
 
         #[test]
         fn multiplier_and_level_are_passed_through() {
-            let e = Element::new(Some("li".into()), None, 5, None, Some(2)).unwrap();
+            let e = Element::new(Some("li".into()), None, 5, None, Some(2), &Config::default()).unwrap();
             assert_eq!(e.multiplier, 5);
             assert_eq!(e.level, Some(2));
         }
@@ -375,29 +375,21 @@ mod tests {
     // Element::new — multi-element snippet expansion
     // -------------------------------------------------------------------------
     mod multi_element_snippet_tests {
-
         use super::*;
-
-        // ── AST shape ───────────────────────────────────────────────────────────
 
         #[test]
         fn child_operator_in_expansion_produces_group() {
-            // "card" → "div.card>p" contains '>' → must become a group wrapper
-            let _guard = init_config(&[("card", "div.card>p")]);
-            let e = Element::new(Some("card".into()), None, 1, None, None).unwrap();
-            assert!(
-                e.identifier.is_none(),
-                "group wrapper must have identifier = None"
-            );
+            let config = html_config(&[("card", "div.card>p")]);
+            let e = Element::new(Some("card".into()), None, 1, None, None, &config).unwrap();
+            assert!(e.identifier.is_none(), "group wrapper must have identifier = None");
             assert!(e.group.is_some());
             assert_eq!(e.group.unwrap().identifier.as_deref(), Some("div"));
         }
 
         #[test]
         fn sibling_operator_in_expansion_produces_group() {
-            // "duo" → "h1+p" contains '+' → must become a group wrapper
-            let _guard = init_config(&[("duo", "h1+p")]);
-            let e = Element::new(Some("duo".into()), None, 1, None, None).unwrap();
+            let config = html_config(&[("duo", "h1+p")]);
+            let e = Element::new(Some("duo".into()), None, 1, None, None, &config).unwrap();
             assert!(e.identifier.is_none());
             let inner = e.group.expect("should have a group");
             assert_eq!(inner.identifier.as_deref(), Some("h1"));
@@ -408,23 +400,16 @@ mod tests {
 
         #[test]
         fn complex_expansion_builds_nested_tree() {
-            // "card" → "div.card>p.card-header+p.card-body"
-            let _guard = init_config(&[("card", "div.card>p.card-header+p.card-body")]);
-            let e = Element::new(Some("card".into()), None, 1, None, None).unwrap();
+            let config = html_config(&[("card", "div.card>p.card-header+p.card-body")]);
+            let e = Element::new(Some("card".into()), None, 1, None, None, &config).unwrap();
             assert!(e.identifier.is_none());
-
             let inner = e.group.expect("should have group");
-            // outer element is div.card
             assert_eq!(inner.identifier.as_deref(), Some("div"));
             let div_attrs = inner.attributes.as_ref().expect("div should have class");
             assert!(div_attrs.iter().any(|a| a.identifier == "card"));
-
-            // child is p.card-header
             let child_node = inner.node.expect("div should have a child node");
             assert!(matches!(child_node.node_type, NodeType::Children));
             assert_eq!(child_node.node.identifier.as_deref(), Some("p"));
-
-            // p.card-header has sibling p.card-body
             let sibling_node = child_node.node.node.expect("should have sibling");
             assert!(matches!(sibling_node.node_type, NodeType::Sibling));
             assert_eq!(sibling_node.node.identifier.as_deref(), Some("p"));
@@ -432,53 +417,40 @@ mod tests {
 
         #[test]
         fn multiplier_is_preserved_on_group_expansion() {
-            let _guard = init_config(&[("card", "div.card>p")]);
-            let e = Element::new(Some("card".into()), None, 3, None, None).unwrap();
+            let config = html_config(&[("card", "div.card>p")]);
+            let e = Element::new(Some("card".into()), None, 3, None, None, &config).unwrap();
             assert_eq!(e.multiplier, 3);
         }
 
         #[test]
         fn outer_sibling_node_is_preserved_on_group_expansion() {
-            // Simulates the "card" part of "card+footer": the Node pointing to
-            // footer is threaded into the wrapper so it renders after the expansion.
-            let _guard = init_config(&[("card", "div.card>p")]);
-            let footer = Element::new(Some("footer".into()), None, 1, None, None).unwrap();
-            let node = Box::new(Node {
-                node_type: NodeType::Sibling,
-                node: footer,
-            });
-            let e = Element::new(Some("card".into()), None, 1, Some(node), None).unwrap();
+            let config = html_config(&[("card", "div.card>p")]);
+            let footer = Element::new(Some("footer".into()), None, 1, None, None, &config).unwrap();
+            let node = Box::new(Node { node_type: NodeType::Sibling, node: footer });
+            let e = Element::new(Some("card".into()), None, 1, Some(node), None, &config).unwrap();
             let sibling = e.node.expect("wrapper must carry the sibling node");
             assert!(matches!(sibling.node_type, NodeType::Sibling));
             assert_eq!(sibling.node.identifier.as_deref(), Some("footer"));
         }
 
-        // ── Display / rendering ──────────────────────────────────────────────────
-
         #[test]
         fn child_expansion_renders_correctly() {
-            let _guard = init_config(&[("card", "div.card>p")]);
-            let e = Element::new(Some("card".into()), None, 1, None, None).unwrap();
+            let config = html_config(&[("card", "div.card>p")]);
+            let e = Element::new(Some("card".into()), None, 1, None, None, &config).unwrap();
             assert_eq!(e.to_string(), "<div class=\"card\">\n\t<p></p>\n</div>");
         }
 
         #[test]
         fn sibling_expansion_renders_correctly() {
-            let _guard = init_config(&[("duo", "h1+p")]);
-            let e = Element::new(Some("duo".into()), None, 1, None, None).unwrap();
+            let config = html_config(&[("duo", "h1+p")]);
+            let e = Element::new(Some("duo".into()), None, 1, None, None, &config).unwrap();
             assert_eq!(e.to_string(), "<h1></h1>\n<p></p>");
         }
 
         #[test]
         fn complex_card_expansion_renders_correctly() {
-            // "card" → "div.card>p.card-header+p.card-body"
-            // Expected layout:
-            //   <div class="card">
-            //     <p class="card-header"></p>
-            //     <p class="card-body"></p>
-            //   </div>
-            let _guard = init_config(&[("card", "div.card>p.card-header+p.card-body")]);
-            let e = Element::new(Some("card".into()), None, 1, None, None).unwrap();
+            let config = html_config(&[("card", "div.card>p.card-header+p.card-body")]);
+            let e = Element::new(Some("card".into()), None, 1, None, None, &config).unwrap();
             assert_eq!(
                 e.to_string(),
                 "<div class=\"card\">\n\t<p class=\"card-header\"></p>\n\t<p class=\"card-body\"></p>\n</div>"
@@ -487,9 +459,8 @@ mod tests {
 
         #[test]
         fn multiplied_group_expansion_renders_correctly() {
-            // "duo" → "h1+p", multiplier = 3 → three h1+p pairs separated by newlines
-            let _guard = init_config(&[("duo", "h1+p")]);
-            let e = Element::new(Some("duo".into()), None, 3, None, None).unwrap();
+            let config = html_config(&[("duo", "h1+p")]);
+            let e = Element::new(Some("duo".into()), None, 3, None, None, &config).unwrap();
             assert_eq!(
                 e.to_string(),
                 "<h1></h1>\n<p></p>\n<h1></h1>\n<p></p>\n<h1></h1>\n<p></p>"
@@ -498,14 +469,10 @@ mod tests {
 
         #[test]
         fn group_expansion_with_outer_sibling_renders_correctly() {
-            // card+footer: the footer sibling must appear after the expanded card tree
-            let _guard = init_config(&[("card", "div.card>p")]);
-            let footer = Element::new(Some("footer".into()), None, 1, None, None).unwrap();
-            let node = Box::new(Node {
-                node_type: NodeType::Sibling,
-                node: footer,
-            });
-            let e = Element::new(Some("card".into()), None, 1, Some(node), None).unwrap();
+            let config = html_config(&[("card", "div.card>p")]);
+            let footer = Element::new(Some("footer".into()), None, 1, None, None, &config).unwrap();
+            let node = Box::new(Node { node_type: NodeType::Sibling, node: footer });
+            let e = Element::new(Some("card".into()), None, 1, Some(node), None, &config).unwrap();
             assert_eq!(
                 e.to_string(),
                 "<div class=\"card\">\n\t<p></p>\n</div>\n<footer></footer>"

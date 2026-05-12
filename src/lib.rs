@@ -50,8 +50,8 @@ pub mod parser;
 ///   `Some(n)` prefixes every root-level element with `n` tabs, useful
 ///   when embedding the expansion inside an already-indented block.
 /// - `config` — Optional [`Config`] that sets the parser mode and provides
-///   user-defined snippet aliases. Pass `None` to keep the current global
-///   config unchanged (defaulting to HTML mode with no custom snippets).
+///   user-defined snippet aliases. Pass `None` to use [`Config::default`]
+///   (HTML mode, empty snippet table).
 ///
 /// # Errors
 ///
@@ -94,10 +94,10 @@ pub mod parser;
 /// let snippets = HashMap::from([
 ///     ("btn".to_string(), "MyButton".to_string()),
 /// ]);
-/// let config = Config { mode:ParserMode::JSX, snippets};
+/// let config = Config { mode: ParserMode::HTML, snippets };
 ///
 /// assert_eq!(
-///     expand("btn", None,Some(config)).unwrap(),
+///     expand("btn", None, Some(config)).unwrap(),
 ///     "<MyButton></MyButton>"
 /// );
 /// ```
@@ -117,15 +117,13 @@ pub fn expand(
     base_level: Option<usize>,
     config: Option<Config>,
 ) -> Result<String, GlyfError> {
-    if let Some(cfg) = config {
-        Config::init(cfg.mode, cfg.snippets);
-    }
+    let config = config.unwrap_or_default();
 
     if !input_correctly_close(abbr) {
         return Err(GlyfError::UnmatchedBrackets);
     }
 
-    match parse_input(abbr, base_level) {
+    match parse_input(abbr, base_level, &config) {
         Ok(node) => Ok(node.to_string()),
         Err(e) => Err(e),
     }

@@ -13,7 +13,7 @@ use std::{fmt::Display, sync::LazyLock};
 
 use regex::Regex;
 
-use crate::config::{Config, ParserMode};
+use crate::config::ParserMode;
 
 static ATTRIBUTE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(:\{.+?\}|:[\w$-]+=\{.+?\}|:[\w$-]+=[^:<]+|:[\w$-]+|\.[\w\/-]+|#[\w-]+|<.+$)")
@@ -45,26 +45,31 @@ pub struct Attribute {
     /// The attribute value, if present. Only used by `Id` (the id string) and `Props` (`:key=value`).
     pub value: Option<String>,
     pub attribute_type: AttributeType,
+    pub mode: ParserMode,
 }
 
 impl Attribute {
-    pub fn new(identifier: String, value: Option<String>, attribute_type: AttributeType) -> Self {
+    pub fn new(
+        identifier: String,
+        value: Option<String>,
+        attribute_type: AttributeType,
+        mode: &ParserMode,
+    ) -> Self {
         Self {
             identifier,
             value,
             attribute_type,
+            mode: *mode,
         }
     }
 }
 
 impl Display for Attribute {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mode = &Config::get().mode;
-
         match self.attribute_type {
             AttributeType::Id => write!(f, " id=\"{}\"", self.value.as_deref().unwrap_or("")),
             AttributeType::Class => {
-                if mode == &ParserMode::HTML {
+                if self.mode == ParserMode::HTML {
                     write!(f, " class=\"{}\"", self.identifier)
                 } else {
                     write!(f, " className=\"{}\"", self.identifier)
@@ -72,7 +77,7 @@ impl Display for Attribute {
             }
             AttributeType::Props => {
                 if let Some(value) = self.value.as_deref() {
-                    let formatted = if !value.starts_with("{") || mode == &ParserMode::HTML {
+                    let formatted = if !value.starts_with("{") || self.mode == ParserMode::HTML {
                         format!("\"{}\"", value)
                     } else {
                         value.to_string()
@@ -96,7 +101,7 @@ impl Display for Attribute {
 /// Prop values are handled in two ways:
 /// - `{expr}` — kept as-is in JSX mode; wrapped in `"quotes"` in HTML mode
 /// - `plain`  — always wrapped in `"quotes"`
-pub fn parse_attribute(attributes: &str) -> Vec<Attribute> {
+pub fn parse_attribute(attributes: &str, mode: &ParserMode) -> Vec<Attribute> {
     let matcher = ATTRIBUTE_REGEX.find_iter(attributes);
     let mut attributes: Vec<Attribute> = Vec::new();
     for capture in matcher.into_iter() {
@@ -114,6 +119,7 @@ pub fn parse_attribute(attributes: &str) -> Vec<Attribute> {
                     identifier.to_string(),
                     value,
                     AttributeType::Props,
+                    mode,
                 ));
             }
             Some('.') => {
@@ -122,6 +128,7 @@ pub fn parse_attribute(attributes: &str) -> Vec<Attribute> {
                     class.to_string(),
                     None,
                     AttributeType::Class,
+                    mode,
                 ));
             }
             Some('#') => {
@@ -130,11 +137,17 @@ pub fn parse_attribute(attributes: &str) -> Vec<Attribute> {
                     "id".to_string(),
                     Some(id.to_string()),
                     AttributeType::Id,
+                    mode,
                 ));
             }
             Some('<') => {
                 let text = &element[1..];
-                attributes.push(Attribute::new(text.to_string(), None, AttributeType::Text));
+                attributes.push(Attribute::new(
+                    text.to_string(),
+                    None,
+                    AttributeType::Text,
+                    mode,
+                ));
             }
             _ => {}
         }
@@ -155,12 +168,12 @@ mod tests {
 
         #[test]
         fn empty_string_returns_no_attributes() {
-            assert!(parse_attribute("").is_empty());
+            assert!(parse_attribute("", &ParserMode::HTML).is_empty());
         }
 
         #[test]
         fn parses_single_class() {
-            let attrs = parse_attribute(".foo");
+            let attrs = parse_attribute(".foo", &ParserMode::HTML);
             assert_eq!(attrs.len(), 1);
             assert_eq!(attrs[0].identifier, "foo");
             assert!(attrs[0].value.is_none());
@@ -169,7 +182,7 @@ mod tests {
 
         #[test]
         fn parses_multiple_classes() {
-            let attrs = parse_attribute(".flex.items-center.text-lg");
+            let attrs = parse_attribute(".flex.items-center.text-lg", &ParserMode::HTML);
             assert_eq!(attrs.len(), 3);
             assert_eq!(attrs[0].identifier, "flex");
             assert_eq!(attrs[1].identifier, "items-center");
@@ -183,7 +196,7 @@ mod tests {
 
         #[test]
         fn parses_id() {
-            let attrs = parse_attribute("#my-id");
+            let attrs = parse_attribute("#my-id", &ParserMode::HTML);
             assert_eq!(attrs.len(), 1);
             assert_eq!(attrs[0].identifier, "id");
             assert_eq!(attrs[0].value, Some("my-id".to_string()));
@@ -192,7 +205,7 @@ mod tests {
 
         #[test]
         fn parses_prop_without_value() {
-            let attrs = parse_attribute(":disabled");
+            let attrs = parse_attribute(":disabled", &ParserMode::HTML);
             assert_eq!(attrs.len(), 1);
             assert_eq!(attrs[0].identifier, "disabled");
             assert!(attrs[0].value.is_none());
@@ -201,7 +214,7 @@ mod tests {
 
         #[test]
         fn parses_prop_with_simple_value() {
-            let attrs = parse_attribute(":type=text");
+            let attrs = parse_attribute(":type=text", &ParserMode::HTML);
             assert_eq!(attrs.len(), 1);
             assert_eq!(attrs[0].identifier, "type");
             assert_eq!(attrs[0].value.as_deref(), Some("text"));
@@ -210,7 +223,7 @@ mod tests {
 
         #[test]
         fn parses_prop_with_braced_value() {
-            let attrs = parse_attribute(":onClick={handler}");
+            let attrs = parse_attribute(":onClick={handler}", &ParserMode::HTML);
             assert_eq!(attrs.len(), 1);
             assert_eq!(attrs[0].identifier, "onClick");
             assert_eq!(attrs[0].value.as_deref(), Some("{handler}"));
@@ -219,7 +232,7 @@ mod tests {
         #[test]
         fn two_braced_props_are_separate() {
             // non-greedy +? must not merge :a={x}:b={y} into one match
-            let attrs = parse_attribute(":a={x}:b={y}");
+            let attrs = parse_attribute(":a={x}:b={y}", &ParserMode::HTML);
             assert_eq!(attrs.len(), 2);
             assert_eq!(attrs[0].identifier, "a");
             assert_eq!(attrs[0].value.as_deref(), Some("{x}"));
@@ -229,7 +242,7 @@ mod tests {
 
         #[test]
         fn parses_spread_syntax() {
-            let attrs = parse_attribute(":{...props}");
+            let attrs = parse_attribute(":{...props}", &ParserMode::HTML);
             assert_eq!(attrs.len(), 1);
             assert_eq!(attrs[0].identifier, "{...props}");
             assert!(attrs[0].value.is_none());
@@ -238,7 +251,7 @@ mod tests {
 
         #[test]
         fn parses_text_content() {
-            let attrs = parse_attribute("<Hello World");
+            let attrs = parse_attribute("<Hello World", &ParserMode::HTML);
             assert_eq!(attrs.len(), 1);
             assert_eq!(attrs[0].identifier, "Hello World");
             assert!(matches!(attrs[0].attribute_type, AttributeType::Text));
@@ -247,7 +260,7 @@ mod tests {
         #[test]
         fn parses_mixed_attributes_in_order() {
             // .class first, then #id, then :prop
-            let attrs = parse_attribute(".card#sidebar:aria-label=nav");
+            let attrs = parse_attribute(".card#sidebar:aria-label=nav", &ParserMode::HTML);
             assert_eq!(attrs.len(), 3);
             assert!(matches!(attrs[0].attribute_type, AttributeType::Class));
             assert!(matches!(attrs[1].attribute_type, AttributeType::Id));
@@ -263,19 +276,24 @@ mod tests {
 
         #[test]
         fn id_renders_with_value() {
-            let a = Attribute::new("id".into(), Some("main".into()), AttributeType::Id);
+            let a = Attribute::new(
+                "id".into(),
+                Some("main".into()),
+                AttributeType::Id,
+                &ParserMode::HTML,
+            );
             assert_eq!(a.to_string(), " id=\"main\"");
         }
 
         #[test]
         fn id_renders_empty_string_when_value_is_none() {
-            let a = Attribute::new("id".into(), None, AttributeType::Id);
+            let a = Attribute::new("id".into(), None, AttributeType::Id, &ParserMode::HTML);
             assert_eq!(a.to_string(), " id=\"\"");
         }
 
         #[test]
         fn class_renders_with_leading_space() {
-            let a = Attribute::new("flex".into(), None, AttributeType::Class);
+            let a = Attribute::new("flex".into(), None, AttributeType::Class, &ParserMode::HTML);
             assert_eq!(a.to_string(), " class=\"flex\"");
         }
 
@@ -285,30 +303,41 @@ mod tests {
                 "href".into(),
                 Some("https://example.com".into()),
                 AttributeType::Props,
+                &ParserMode::HTML,
             );
             assert_eq!(a.to_string(), " href=\"https://example.com\"");
         }
 
         #[test]
         fn props_braced_value_is_not_quoted() {
-            let _guard = Config::for_test(ParserMode::JSX, Default::default());
             let a = Attribute::new(
                 "onClick".into(),
                 Some("{handler}".into()),
                 AttributeType::Props,
+                &ParserMode::JSX,
             );
             assert_eq!(a.to_string(), " onClick={handler}");
         }
 
         #[test]
         fn props_no_value_renders_as_boolean_attribute() {
-            let a = Attribute::new("disabled".into(), None, AttributeType::Props);
+            let a = Attribute::new(
+                "disabled".into(),
+                None,
+                AttributeType::Props,
+                &ParserMode::HTML,
+            );
             assert_eq!(a.to_string(), " disabled");
         }
 
         #[test]
         fn text_renders_content_without_prefix() {
-            let a = Attribute::new("Hello World".into(), None, AttributeType::Text);
+            let a = Attribute::new(
+                "Hello World".into(),
+                None,
+                AttributeType::Text,
+                &ParserMode::HTML,
+            );
             assert_eq!(a.to_string(), "Hello World");
         }
     }
