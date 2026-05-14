@@ -6,13 +6,13 @@
 
 use std::collections::HashMap;
 
-const SNIPPET_BOUNDARIES: &[char] = &[':', '.', '#', '>', '+', '*', '<', '/'];
+const SNIPPET_BOUNDARIES: &[char] = &[':', '.', '#', '>', '+', '*', '/'];
 
 /// Expands a snippet alias to its fuller Glyf form.
 ///
-/// Looks up the longest key in the active snippet table (from [`Config::get`])
-/// that is a prefix of `value` and is either an exact match or immediately
-/// followed by a boundary character.
+/// Looks up the longest key in the provided `snippets` map that is a prefix
+/// of `value` and is either an exact match or immediately followed by a boundary
+/// character.
 /// If no key matches, `value` is returned unchanged.
 ///
 /// The returned string is still an Glyf string, not HTML — it is fed back
@@ -27,25 +27,20 @@ const SNIPPET_BOUNDARIES: &[char] = &[':', '.', '#', '>', '+', '*', '<', '/'];
 /// // "a:id=main" → "a:href:id=main" (extra attrs appended after expansion)
 /// ```
 pub(super) fn parse_snippet(value: &str, snippets: &HashMap<String, String>) -> String {
-    let mut transformed_value = String::from(value);
-
-    let matching_key = snippets
-        .keys()
-        .filter(|key| {
-            value.starts_with(*key) && {
+    let longuest_match = snippets
+        .iter()
+        .filter(|(key, _)| {
+            value.starts_with(key.as_str()) && {
                 let rest = &value[key.len()..];
                 rest.is_empty() || rest.starts_with(SNIPPET_BOUNDARIES)
             }
         })
-        .max_by_key(|key| key.len());
+        .max_by_key(|(key, _)| key.len());
 
-    if let Some(key) = matching_key
-        && let Some(expanded) = snippets.get(key)
-    {
-        transformed_value = format!("{}{}", expanded, value.split_at(key.len()).1);
+    match longuest_match {
+        Some((key, expanded)) => format!("{}{}", expanded, &value[key.len()..]),
+        None => value.to_string(),
     }
-
-    transformed_value
 }
 
 #[cfg(test)]

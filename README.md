@@ -25,7 +25,7 @@ ul>li.item*3
 
 ```toml
 [dependencies]
-glyf-core = "0.2.1"
+glyf-core = "0.2.2"
 ```
 
 ---
@@ -177,7 +177,8 @@ match expand(abbr, None, None) {
 | `tag#id` | Id | `div#app` | `<div id="app">` |
 | `tag:key=val` | Prop | `a:href=url` | `<a href="url">` |
 | `tag:key={expr}` | JSX prop | `div:onClick={fn}` | `<div onClick={fn}>` |
-| `tag<text` | Text content | `p<Hello` | `<p>Hello</p>` |
+| `tag>>text` | Text content | `p>>Hello` | `<p>Hello</p>` |
+| `tag#{expr}` | JSX dynamic id | `div#{myId}` | `<div id={myId}>` |
 | `.cls` / `#id` / `:prop` / `>child` | Implicit `div` | `.foo` | `<div class="foo">` |
 | `e` | JSX fragment (JSX mode only) | `e>p` | `<>` with `<p>` inside |
 

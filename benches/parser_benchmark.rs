@@ -19,7 +19,7 @@ const INPUTS: &[(&str, &str)] = &[
     // The complex Tailwind query from the old tests
     (
         "complex",
-        "div.fixed.bottom-0.left-0.right-0.top-0.z-20.flex>div.flex.flex-col.items-center>(div.delay>Logo.size-40:fill=white/)+div>Form.bg-surface:action={login}>(div>p<Connexion+Icon:icon=lock/)+(div>Textfield:label=Email:type=email/+Textfield:label=Password:type=password/)+div>Button:type=submit<Login",
+        "div.fixed.bottom-0.left-0.right-0.top-0.z-20.flex>div.flex.flex-col.items-center>(div.delay>Logo.size-40:fill=white/)+div>Form.bg-surface:action={login}>(div>p>>Connexion+Icon:icon=lock/)+(div>Textfield:label=Email:type=email/+Textfield:label=Password:type=password/)+div>Button:type=submit>>Login",
     ),
 ];
 

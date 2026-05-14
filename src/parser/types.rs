@@ -10,7 +10,7 @@ use regex::Regex;
 
 use crate::{
     config::{Config, ParserMode},
-    parser::parse_input,
+    parser::{parse_input, utils::has_node_operator},
 };
 
 use super::{
@@ -19,9 +19,6 @@ use super::{
     snippet::parse_snippet,
 };
 
-// NOTE: '>' and '+' must not appear unescaped in snippet expansion attribute
-// values or they will be mis-read as child/sibling operators.
-static NODE_IDENTIFIER: &[char] = &['>', '+'];
 static IDENTIFIER_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\w-]+").unwrap());
 
 /// The relationship between an element and its next node.
@@ -113,8 +110,21 @@ impl Element {
     ) -> Result<Self, GlyfError> {
         let mode = config.mode();
         if let Some(value) = &value {
+            if mode == ParserMode::JSX && value == "e" {
+                return Ok(Self {
+                    identifier: Some(String::new()),
+                    self_closing: false,
+                    attributes: None,
+                    group,
+                    multiplier,
+                    node,
+                    level,
+                    mode,
+                });
+            }
+
             let transformed_value = parse_snippet(value, config.snippets());
-            if transformed_value.contains(NODE_IDENTIFIER) {
+            if has_node_operator(&transformed_value) {
                 let group = parse_input(&transformed_value, level, config);
                 return match group {
                     Err(e) => Err(e),
@@ -127,19 +137,6 @@ impl Element {
                         ..Default::default()
                     }),
                 };
-            }
-
-            if mode == ParserMode::JSX && &transformed_value == "e" {
-                return Ok(Self {
-                    identifier: Some(String::new()),
-                    self_closing: false,
-                    attributes: None,
-                    group,
-                    multiplier,
-                    node,
-                    level,
-                    mode,
-                });
             }
 
             let identifier_match = IDENTIFIER_REGEX.find(&transformed_value);

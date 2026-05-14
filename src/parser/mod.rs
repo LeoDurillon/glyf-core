@@ -17,7 +17,8 @@
 //! | `tag#id` | Id | `div#app` | `<div id="app">` |
 //! | `tag:key=val` | Prop | `a:href=url` | `<a href="url">` |
 //! | `tag:key={expr}` | JSX prop | `div:onClick={fn}` | `<div onClick={fn}>` |
-//! | `tag<text` | Text content | `p<Hello` | `<p>Hello</p>` |
+//! | `tag>>text` | Text content | `p>>Hello` | `<p>Hello</p>` |
+//! | `tag#{expr}` | JSX dynamic id | `div#{myId}` | `<div id={myId}>` |
 //! | `.cls` / `#id` / `:prop` / `>child` | Implicit div | `.foo` | `<div class="foo">` |
 //! | `e` | JSX fragment (JSX mode only) | `e>p` | `<>\n\t<p></p>\n</>` |
 //!
@@ -456,6 +457,16 @@ mod tests {
         }
 
         #[test]
+        fn id_from_variable_render_correctly() {
+            let r = ok(parse_input("#{myId}", None, &Config::default()));
+            assert_eq!(r.identifier.as_deref(), Some("div"));
+            let attributes = r.attributes.expect("should have id attribute");
+            assert_eq!(attributes.len(), 1);
+            assert!(matches!(attributes[0].attribute_type, AttributeType::Id));
+            assert_eq!(attributes[0].value.as_deref(), Some("{myId}"));
+        }
+
+        #[test]
         fn bare_child_operator_returns_err() {
             // ">" prepends div, but then the child is empty string -> NoIdentifier
             assert!(parse_input(">", None, &Config::default()).is_err());
@@ -664,7 +675,7 @@ mod tests {
         #[test]
         fn element_with_text_content() {
             assert_eq!(
-                ok(parse_input("div<Hello", None, &Config::default())).to_string(),
+                ok(parse_input("div>>Hello", None, &Config::default())).to_string(),
                 "<div>Hello</div>"
             );
         }

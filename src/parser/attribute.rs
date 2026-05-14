@@ -1,13 +1,14 @@
 //! Attribute parsing for Glyf abbreviations.
 //!
-//! Handles the four attribute syntaxes supported by the parser:
+//! Handles the five attribute syntaxes supported by the parser:
 //!
 //! | Syntax | Type | Example | Output |
 //! |--------|------|---------|--------|
 //! | `.name` | Class | `div.flex` | `class="flex"` |
 //! | `#value` | Id | `div#app` | `id="app"` |
+//! | `#{expr}` | JSX dynamic id | `div#{myId}` | `id={myId}` |
 //! | `:key=value` | Props | `a:href=url` | `href="url"` |
-//! | `<text` | Text | `p<Hello` | `>Hello` (inner content) |
+//! | `>>text` | Text content | `p>>Hello` | inner content `Hello` |
 
 use std::{fmt::Display, sync::LazyLock};
 
@@ -16,8 +17,10 @@ use regex::Regex;
 use crate::config::ParserMode;
 
 static ATTRIBUTE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(:\{.+?\}|:[\w$-]+=\{.+?\}|:[\w$-]+=[^:<]+|:[\w$-]+|\.[\w\/-]+|#[\w-]+|<.+$)")
-        .unwrap()
+    Regex::new(
+        r"(:\{.+?\}|:[\w$-]+=\{.+?\}|:[\w$-]+=[^:>+]+|:[\w$-]+|\.[\w\/-]+|#\{.+?\}|#[\w-]+|>>.+$)",
+    )
+    .unwrap()
 });
 
 /// Classifies how a parsed attribute maps to its HTML/JSX output.
@@ -67,7 +70,14 @@ impl Attribute {
 impl Display for Attribute {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.attribute_type {
-            AttributeType::Id => write!(f, " id=\"{}\"", self.value.as_deref().unwrap_or("")),
+            AttributeType::Id => {
+                let value = self.value.as_deref().unwrap_or("");
+                if self.mode == ParserMode::JSX && value.starts_with('{') {
+                    write!(f, " id={}", value)
+                } else {
+                    write!(f, " id=\"{}\"", value)
+                }
+            }
             AttributeType::Class => {
                 if self.mode == ParserMode::HTML {
                     write!(f, " class=\"{}\"", self.identifier)
@@ -140,8 +150,8 @@ pub fn parse_attribute(attributes: &str, mode: &ParserMode) -> Vec<Attribute> {
                     mode,
                 ));
             }
-            Some('<') => {
-                let text = &element[1..];
+            Some('>') => {
+                let text = &element[2..];
                 attributes.push(Attribute::new(
                     text.to_string(),
                     None,
@@ -251,7 +261,7 @@ mod tests {
 
         #[test]
         fn parses_text_content() {
-            let attrs = parse_attribute("<Hello World", &ParserMode::HTML);
+            let attrs = parse_attribute(">>Hello World", &ParserMode::HTML);
             assert_eq!(attrs.len(), 1);
             assert_eq!(attrs[0].identifier, "Hello World");
             assert!(matches!(attrs[0].attribute_type, AttributeType::Text));
