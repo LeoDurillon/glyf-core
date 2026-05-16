@@ -58,21 +58,7 @@ pub(super) fn get_multiplier(element: &str) -> Option<usize> {
 /// Returns `true` at first found match to avoid unnecessary lookup
 /// Returns `false` if it does not found any match in string
 pub(super) fn has_node_operator(element: &str) -> bool {
-    let bytes = element.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'>' => {
-                let prev_gt = i > 0 && bytes[i - 1] == b'>';
-                let next_gt = bytes.get(i + 1) == Some(&b'>');
-                if !prev_gt && !next_gt {
-                    return true; // single >, not part of >>
-                }
-            }
-            b'+' => return true,
-            _ => {}
-        }
-    }
-    false
+    find_at_depth_zero(element, '>').is_some() || find_at_depth_zero(element, '+').is_some()
 }
 
 #[cfg(test)]

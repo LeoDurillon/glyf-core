@@ -115,7 +115,7 @@ impl Render for AttributeType {
     }
 }
 
-/// Parses the attribute portion of an Glyf element string into a list of [`Attribute`]s.
+/// Parses the attribute portion of an Glyf element string into a list of [`AttributeType`]s.
 ///
 /// `attributes` is the raw string **after** the identifier has been stripped,
 /// e.g. for `div.foo#bar:disabled` this receives `.foo#bar:disabled`.
