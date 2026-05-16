@@ -43,19 +43,13 @@ pub(super) fn find_at_depth_zero(input: &str, target: char) -> Option<usize> {
 /// followed by a digit. The `N` value is everything up to the next
 /// non-digit character, so `li*3+span` returns `Some(3)`.
 pub(super) fn get_multiplier(element: &str) -> Option<usize> {
-    match element.contains("*") {
-        false => None,
-        true => {
-            let index = find_at_depth_zero(element, '*')?;
+    let index = find_at_depth_zero(element, '*')?;
+    let slice = element.split_at(index + 1).1;
+    let capture = MULTIPLIER_REGEX.captures(slice)?;
 
-            let slice = element.split_at(index + 1).1;
-            let capture = MULTIPLIER_REGEX.captures(slice)?;
+    let multiplier = capture.get(0)?;
 
-            let multiplier = capture.get(0)?;
-
-            Some(multiplier.as_str().parse::<usize>().unwrap_or(1))
-        }
-    }
+    Some(multiplier.as_str().parse::<usize>().unwrap_or(1))
 }
 
 /// Check string for node operator (> or +)

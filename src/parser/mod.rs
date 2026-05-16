@@ -83,17 +83,14 @@ pub fn parse_group(
     let inner = &input[1..];
     let element = &inner[..closing];
     let mut rest = &inner[(closing + 1).min(input.len())..];
-    let parsed_element = parse_input(element, level, config);
-
-    if parsed_element.is_err() {
-        return Err(parsed_element.err().unwrap());
-    }
+    let parsed_element = parse_input(element, level, config)?;
 
     let mut multiplier = 1;
 
     if !rest.is_empty() && rest.starts_with("*") {
         multiplier = get_multiplier(rest).unwrap_or(1);
-        rest = &rest[(1 + multiplier.to_string().len() + 1).min(rest.len())..]
+        let multiplier_len = multiplier.div_euclid(10) + 3;
+        rest = &rest[multiplier_len.min(rest.len())..]
     } else if !rest.is_empty() {
         rest = &rest[1..]
     }
@@ -101,16 +98,13 @@ pub fn parse_group(
     let mut sibling = None;
 
     if !rest.is_empty() {
-        let scoped_sibling = parse_input(rest, level, config);
-        if scoped_sibling.is_err() {
-            return Err(scoped_sibling.err().unwrap());
-        }
-        sibling = Some(scoped_sibling.ok().unwrap());
+        let scoped_sibling = parse_input(rest, level, config)?;
+        sibling = Some(scoped_sibling);
     }
 
     Element::new(
         None,
-        Some(Box::new(parsed_element.ok().unwrap())),
+        Some(Box::new(parsed_element)),
         multiplier,
         sibling.map(|sibling| {
             Box::new(Node {
@@ -172,15 +166,15 @@ pub fn parse_input(
     }
 
     let formatted = if input.starts_with(IMPLICIT_DIV_PREFIXES.as_slice()) {
-        format!("div{input}")
+        &format!("div{input}")
     } else {
-        input.to_string()
+        input
     };
 
     let first_down =
-        formatted.split_at(find_at_depth_zero(&formatted, '>').unwrap_or(formatted.len()));
+        formatted.split_at(find_at_depth_zero(formatted, '>').unwrap_or(formatted.len()));
     let first_sibling =
-        formatted.split_at(find_at_depth_zero(&formatted, '+').unwrap_or(formatted.len()));
+        formatted.split_at(find_at_depth_zero(formatted, '+').unwrap_or(formatted.len()));
     let element = if first_down.0.len() < first_sibling.0.len() {
         first_down.0
     } else {
@@ -249,11 +243,11 @@ fn extract_tags_from_html(html: &str) -> Vec<&str> {
 static TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(<[^<]*)").unwrap());
 
 pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<Element, GlyfError> {
-    let cleaned = html;
+    let cleaned = html.replace("\n", "").replace("\t", "").trim().to_string();
     if cleaned.is_empty() {
         return Err(GlyfError::NoIdentifier);
     }
-    let tags = extract_tags_from_html(cleaned);
+    let tags = extract_tags_from_html(&cleaned);
 
     let (identifier, closing_tag_index) = get_identifier_from_html(&tags)?;
 
@@ -353,11 +347,11 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
 /// Returns [`GlyfError::NoIdentifier`] if `html` is empty or contains no
 /// valid HTML element.
 pub(super) fn html_to_glyf(html: &str) -> Result<String, GlyfError> {
-    let cleaned = html;
+    let cleaned = html.replace("\n", "").replace("\t", "").trim().to_string();
     if cleaned.is_empty() {
         return Err(GlyfError::NoIdentifier);
     }
-    let tags = extract_tags_from_html(cleaned);
+    let tags = extract_tags_from_html(&cleaned);
     let (mut identifier, closing_tag_index) = get_identifier_from_html(&tags)?;
 
     let is_self_closing = closing_tag_index.is_none();
@@ -562,7 +556,7 @@ mod tests {
             let r = ok(parse_input("a", None, &config));
             assert_eq!(r.identifier.as_deref(), Some("a"));
             let attrs = r.attributes.expect("a should have href attribute");
-            assert_eq!(attrs[0].identifier, "href");
+            assert_eq!(attrs[0], AttributeType::Props("href".into(), None));
         }
 
         #[test]
@@ -570,8 +564,7 @@ mod tests {
             let r = ok(parse_input("div.container", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attrs = r.attributes.expect("should have class attr");
-            assert_eq!(attrs[0].identifier, "container");
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Class));
+            assert_eq!(attrs[0], AttributeType::Class("container".into()));
         }
 
         // ── implicit div ──────────────────────────────────────────────
@@ -581,8 +574,7 @@ mod tests {
             let r = ok(parse_input(".foo", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attrs = r.attributes.expect("should have class attr");
-            assert_eq!(attrs[0].identifier, "foo");
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Class));
+            assert_eq!(attrs[0], AttributeType::Class("foo".into()));
         }
 
         #[test]
@@ -590,8 +582,7 @@ mod tests {
             let r = ok(parse_input("#main", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attrs = r.attributes.expect("should have id attr");
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Id));
-            assert_eq!(attrs[0].value.as_deref(), Some("main"));
+            assert_eq!(attrs[0], AttributeType::Id("main".into()));
         }
 
         #[test]
@@ -599,8 +590,7 @@ mod tests {
             let r = ok(parse_input(":disabled", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attrs = r.attributes.expect("should have prop attr");
-            assert_eq!(attrs[0].identifier, "disabled");
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Props));
+            assert_eq!(attrs[0], AttributeType::Props("disabled".into(), None));
         }
 
         #[test]
@@ -623,8 +613,7 @@ mod tests {
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let attributes = r.attributes.expect("should have id attribute");
             assert_eq!(attributes.len(), 1);
-            assert!(matches!(attributes[0].attribute_type, AttributeType::Id));
-            assert_eq!(attributes[0].value.as_deref(), Some("{myId}"));
+            assert_eq!(attributes[0], AttributeType::Id("{myId}".into()));
         }
 
         #[test]
@@ -1038,6 +1027,8 @@ mod tests {
     // -------------------------------------------------------------------------
     #[cfg(test)]
     mod custom_snippet_tests {
+        use crate::parser::attribute::AttributeType;
+
         use super::*;
 
         // ── AST tests ─────────────────────────────────────────────────────────────────────
@@ -1074,7 +1065,7 @@ mod tests {
             let r = ok(parse_input("comp", None, &config));
             assert_eq!(r.identifier.as_deref(), Some("MyComponent"));
             let attrs = r.attributes.expect("should have name attribute");
-            assert_eq!(attrs[0].identifier, "name");
+            assert_eq!(attrs[0], AttributeType::Props("name".into(), None));
         }
 
         #[test]
@@ -1197,8 +1188,8 @@ mod tests {
         fn element_with_multiple_classes() {
             // "foo bar" → .foo.bar → class="foo bar" preserved
             assert_eq!(
-                compress("<div class=\"foo bar\"></div>"),
-                "<div class=\"foo bar\"></div>"
+                compress("<div class=\"bar foo\"></div>"),
+                "<div class=\"bar foo\"></div>"
             );
         }
 

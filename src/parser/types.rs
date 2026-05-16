@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    attribute::{Attribute, AttributeType, parse_attribute},
+    attribute::{AttributeType, Render, parse_attribute},
     error::GlyfError,
     snippet::parse_snippet,
 };
@@ -57,7 +57,7 @@ pub struct Element {
     /// When `true` the element renders as `<tag />` (no closing tag, no children).
     pub self_closing: bool,
     /// Parsed attributes in declaration order (sorted by [`AttributeType`] at render time).
-    pub attributes: Option<Vec<Attribute>>,
+    pub attributes: Option<Vec<AttributeType>>,
     /// Set when this node is a `(...)` group or a multi-element snippet expansion;
     /// contains the inner element tree.
     pub group: Option<Box<Element>>,
@@ -108,8 +108,8 @@ impl Element {
         level: Option<usize>,
         config: &Config,
     ) -> Result<Self, GlyfError> {
-        let mode = config.mode();
-        if let Some(value) = &value {
+        let mode = config.mode;
+        if let Some(value) = value {
             if mode == ParserMode::JSX && value == "e" {
                 return Ok(Self {
                     identifier: Some(String::new()),
@@ -123,7 +123,7 @@ impl Element {
                 });
             }
 
-            let transformed_value = parse_snippet(value, config.snippets());
+            let transformed_value = parse_snippet(&value, &config.snippets);
             if has_node_operator(&transformed_value) {
                 let group = parse_input(&transformed_value, level, config);
                 return match group {
@@ -147,14 +147,12 @@ impl Element {
             let identifier = identifier_match.unwrap().as_str().to_string();
 
             let self_closing = transformed_value.ends_with("/");
-            let attributes = parse_attribute(
-                &transformed_value[identifier.len()..(if self_closing {
-                    transformed_value.len() - 1
-                } else {
-                    transformed_value.len()
-                })],
-                &mode,
-            );
+            let attribute_end = if self_closing {
+                transformed_value.len().saturating_sub(1)
+            } else {
+                transformed_value.len()
+            };
+            let attributes = parse_attribute(&transformed_value[identifier.len()..attribute_end]);
             return Ok(Self {
                 identifier: Some(identifier),
                 self_closing,
@@ -272,30 +270,30 @@ impl Display for Element {
 
         if let Some(identifier) = self.identifier.as_ref() {
             let mut attributes = self.attributes.clone().unwrap_or_default();
-            attributes.sort_by(|a, b| a.attribute_type.cmp(&b.attribute_type));
+            attributes.sort();
 
             let classes = &attributes
                 .iter()
-                .filter(|a| matches!(a.attribute_type, AttributeType::Class))
-                .map(|a| a.identifier.clone())
-                .collect::<Vec<String>>()
+                .map(|a| match a {
+                    AttributeType::Class(name) => name.as_str(),
+                    _ => "",
+                })
+                .filter(|v| !v.is_empty())
+                .collect::<Vec<&str>>()
                 .join(" ");
 
             let props_attributes = &attributes
                 .iter()
-                .filter(|a| {
-                    matches!(a.attribute_type, AttributeType::Props)
-                        || matches!(a.attribute_type, AttributeType::Id)
-                })
-                .map(|a| a.to_string())
+                .filter(|a| matches!(a, AttributeType::Id(_) | AttributeType::Props(_, _)))
+                .map(|a| a.render(self.mode))
                 .collect::<Vec<String>>()
                 .join("");
 
             let text_attribute = if let Some(attribute) = &attributes
                 .iter()
-                .find(|a| matches!(a.attribute_type, AttributeType::Text))
+                .find(|a| matches!(a, AttributeType::Text(_)))
             {
-                attribute.to_string()
+                attribute.render(self.mode)
             } else {
                 String::new()
             };
@@ -501,8 +499,8 @@ mod tests {
             assert_eq!(e.identifier.as_deref(), Some("img"));
             let attrs = e.attributes.expect("img should have attributes");
             assert_eq!(attrs.len(), 2);
-            assert_eq!(attrs[0].identifier, "src");
-            assert_eq!(attrs[1].identifier, "alt");
+            assert_eq!(attrs[0], AttributeType::Props("src".into(), None));
+            assert_eq!(attrs[1], AttributeType::Props("alt".into(), None));
         }
 
         #[test]
@@ -519,8 +517,7 @@ mod tests {
             assert_eq!(e.identifier.as_deref(), Some("div"));
             let attrs = e.attributes.expect("should have attributes");
             assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].identifier, "container");
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Class));
+            assert_eq!(attrs[0], AttributeType::Class("container".into()));
         }
 
         #[test]
@@ -535,8 +532,10 @@ mod tests {
             )
             .unwrap();
             let attrs = e.attributes.expect("should have attributes");
-            assert_eq!(attrs[0].identifier, "role");
-            assert_eq!(attrs[0].value.as_deref(), Some("main"));
+            assert_eq!(
+                attrs[0],
+                AttributeType::Props("role".into(), Some("main".into()))
+            );
         }
 
         #[test]
@@ -601,7 +600,11 @@ mod tests {
             let inner = e.group.expect("should have group");
             assert_eq!(inner.identifier.as_deref(), Some("div"));
             let div_attrs = inner.attributes.as_ref().expect("div should have class");
-            assert!(div_attrs.iter().any(|a| a.identifier == "card"));
+            assert!(
+                div_attrs
+                    .iter()
+                    .any(|a| a == &AttributeType::Class("card".into()))
+            );
             let child_node = inner.node.expect("div should have a child node");
             assert!(matches!(child_node.node_type, NodeType::Children));
             assert_eq!(child_node.node.identifier.as_deref(), Some("p"));

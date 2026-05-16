@@ -94,7 +94,7 @@ pub mod parser;
 /// let snippets = HashMap::from([
 ///     ("btn".to_string(), "MyButton".to_string()),
 /// ]);
-/// let config = Config { mode: ParserMode::HTML, snippets };
+/// let config = Config::new(ParserMode::HTML, snippets);
 ///
 /// assert_eq!(
 ///     expand("btn", None, Some(config)).unwrap(),

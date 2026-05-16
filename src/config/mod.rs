@@ -6,6 +6,7 @@ pub enum ParserMode {
     JSX,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Config {
     pub mode: ParserMode,
@@ -19,14 +20,6 @@ pub struct Config {
 impl Config {
     pub fn new(mode: ParserMode, snippets: HashMap<String, String>) -> Self {
         Self { mode, snippets }
-    }
-
-    pub fn mode(&self) -> ParserMode {
-        self.mode
-    }
-
-    pub fn snippets(&self) -> &HashMap<String, String> {
-        &self.snippets
     }
 }
 

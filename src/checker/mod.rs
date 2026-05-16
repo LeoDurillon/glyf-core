@@ -1,21 +1,26 @@
-use std::collections::HashMap;
+fn is_matching_opener(opener: &char, closer: &char) -> bool {
+    match closer {
+        ')' => &'(' == opener,
+        ']' => &'[' == opener,
+        '}' => &'{' == opener,
+        _ => false,
+    }
+}
 
 pub fn input_correctly_close(input: &str) -> bool {
-    let mut opener: Vec<char> = Vec::new();
-
-    let closer_opener_map = HashMap::from([(')', '('), (']', '['), ('}', '{')]);
+    let mut opener_list: Vec<char> = Vec::new();
 
     for char in input.chars() {
         match char {
             '(' | '{' | '[' => {
-                opener.push(char);
+                opener_list.push(char);
             }
-            ')' | '}' | ']' => match opener.last() {
-                Some(v) => {
-                    if Some(v) != closer_opener_map.get(&char) {
-                        break;
+            ')' | '}' | ']' => match opener_list.last() {
+                Some(opener) => {
+                    if !is_matching_opener(opener, &char) {
+                        return false;
                     }
-                    opener.pop();
+                    opener_list.pop();
                 }
                 None => {
                     return false;
@@ -25,7 +30,7 @@ pub fn input_correctly_close(input: &str) -> bool {
         }
     }
 
-    opener.is_empty()
+    opener_list.is_empty()
 }
 
 #[cfg(test)]

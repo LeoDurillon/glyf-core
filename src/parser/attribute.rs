@@ -10,11 +10,16 @@
 //! | `:key=value` | Props | `a:href=url` | `href="url"` |
 //! | `>>text` | Text content | `p>>Hello` | inner content `Hello` |
 
-use std::{fmt::Display, sync::LazyLock};
+use std::sync::LazyLock;
 
 use regex::Regex;
 
 use crate::config::ParserMode;
+
+pub trait Render {
+    fn render(&self, mode: ParserMode) -> String;
+    fn to_glyf(&self) -> String;
+}
 
 static ATTRIBUTE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -31,38 +36,51 @@ static ATTRIBUTE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum AttributeType {
     /// `#value` — rendered as `id="value"`.
-    Id,
+    Id(String),
     /// `:key` or `:key=value` — rendered as `key` or `key="value"` / `key={value}`.
-    Props,
+    Props(String, Option<String>),
     /// `.name` — all classes are aggregated into a single `class="a b c"` attribute.
-    Class,
-    /// `<text` — placed as inner content between opening and closing tags.
-    Text,
+    Class(String),
+    /// `>>text` — placed as inner content between opening and closing tags.
+    Text(String),
 }
 
-/// A single parsed attribute from an Glyf abbreviation.
-#[derive(Debug, Clone)]
-pub struct Attribute {
-    /// For `Id`: the id string. For `Props`: the key name. For `Class`: the class name. For `Text`: the content.
-    pub identifier: String,
-    /// The attribute value, if present. Only used by `Id` (the id string) and `Props` (`:key=value`).
-    pub value: Option<String>,
-    pub attribute_type: AttributeType,
-    pub mode: ParserMode,
-}
+impl Render for AttributeType {
+    fn render(&self, mode: ParserMode) -> String {
+        match self {
+            AttributeType::Id(id) => {
+                if mode == ParserMode::JSX && id.starts_with('{') {
+                    format!(" id={}", id)
+                } else {
+                    format!(" id=\"{}\"", id)
+                }
+            }
+            AttributeType::Class(class) => {
+                if mode == ParserMode::HTML {
+                    format!(" class=\"{}\"", class)
+                } else {
+                    format!(" className=\"{}\"", class)
+                }
+            }
+            AttributeType::Props(identifier, value) => {
+                if let Some(value) = value.as_deref() {
+                    let formatted = if mode == ParserMode::HTML {
+                        let stripped = if value.starts_with('{') && value.ends_with('}') {
+                            &value[1..value.len() - 1]
+                        } else {
+                            value
+                        };
+                        &format!("\"{}\"", stripped)
+                    } else {
+                        value
+                    };
 
-impl Attribute {
-    pub fn new(
-        identifier: String,
-        value: Option<String>,
-        attribute_type: AttributeType,
-        mode: &ParserMode,
-    ) -> Self {
-        Self {
-            identifier,
-            value,
-            attribute_type,
-            mode: *mode,
+                    format!(" {}={}", identifier, formatted)
+                } else {
+                    format!(" {}", identifier)
+                }
+            }
+            AttributeType::Text(text) => text.to_string(),
         }
     }
 
@@ -75,65 +93,24 @@ impl Attribute {
     /// | `Props` with value | `href="url"` | `:href=url` |
     /// | `Props` boolean | `disabled` | `:disabled` |
     /// | `Text` | text content `Hello` | `>>Hello` |
-    pub fn to_glyf(&self) -> String {
-        match self.attribute_type {
-            AttributeType::Class => {
-                format!(".{}", self.identifier)
+    fn to_glyf(&self) -> String {
+        match self {
+            AttributeType::Class(class) => {
+                format!(".{}", class)
             }
-            AttributeType::Text => {
-                format!(">>{}", self.identifier)
+            AttributeType::Text(text) => {
+                format!(">>{}", text)
             }
-            AttributeType::Id => {
-                format!("#{}", self.value.as_deref().unwrap_or(""))
+            AttributeType::Id(id) => {
+                format!("#{}", id)
             }
-            AttributeType::Props => {
-                if let Some(value) = &self.value {
-                    format!(":{}={}", self.identifier, value)
+            AttributeType::Props(identifier, value) => {
+                if let Some(value) = value {
+                    format!(":{}={}", identifier, value)
                 } else {
-                    format!(":{}", self.identifier)
+                    format!(":{}", identifier)
                 }
             }
-        }
-    }
-}
-
-impl Display for Attribute {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.attribute_type {
-            AttributeType::Id => {
-                let value = self.value.as_deref().unwrap_or("");
-                if self.mode == ParserMode::JSX && value.starts_with('{') {
-                    write!(f, " id={}", value)
-                } else {
-                    write!(f, " id=\"{}\"", value)
-                }
-            }
-            AttributeType::Class => {
-                if self.mode == ParserMode::HTML {
-                    write!(f, " class=\"{}\"", self.identifier)
-                } else {
-                    write!(f, " className=\"{}\"", self.identifier)
-                }
-            }
-            AttributeType::Props => {
-                if let Some(value) = self.value.as_deref() {
-                    let formatted = if self.mode == ParserMode::HTML {
-                        let stripped = if value.starts_with('{') && value.ends_with('}') {
-                            &value[1..value.len() - 1]
-                        } else {
-                            value
-                        };
-                        format!("\"{}\"", stripped)
-                    } else {
-                        value.to_string()
-                    };
-
-                    write!(f, " {}={}", self.identifier, formatted)
-                } else {
-                    write!(f, " {}", self.identifier)
-                }
-            }
-            AttributeType::Text => write!(f, "{}", self.identifier),
         }
     }
 }
@@ -146,9 +123,9 @@ impl Display for Attribute {
 /// Prop values are handled in two ways:
 /// - `{expr}` — kept as-is in JSX mode; wrapped in `"quotes"` in HTML mode
 /// - `plain`  — always wrapped in `"quotes"`
-pub fn parse_attribute(attributes: &str, mode: &ParserMode) -> Vec<Attribute> {
+pub fn parse_attribute(attributes: &str) -> Vec<AttributeType> {
     let matcher = ATTRIBUTE_REGEX.find_iter(attributes);
-    let mut attributes: Vec<Attribute> = Vec::new();
+    let mut attributes: Vec<AttributeType> = Vec::new();
     for capture in matcher.into_iter() {
         let element = capture.as_str();
         match element.chars().next() {
@@ -160,39 +137,19 @@ pub fn parse_attribute(attributes: &str, mode: &ParserMode) -> Vec<Attribute> {
                 } else {
                     None
                 };
-                attributes.push(Attribute::new(
-                    identifier.to_string(),
-                    value,
-                    AttributeType::Props,
-                    mode,
-                ));
+                attributes.push(AttributeType::Props(identifier.into(), value));
             }
             Some('.') => {
                 let class = &element[1..];
-                attributes.push(Attribute::new(
-                    class.to_string(),
-                    None,
-                    AttributeType::Class,
-                    mode,
-                ));
+                attributes.push(AttributeType::Class(class.into()));
             }
             Some('#') => {
                 let id = &element[1..];
-                attributes.push(Attribute::new(
-                    "id".to_string(),
-                    Some(id.to_string()),
-                    AttributeType::Id,
-                    mode,
-                ));
+                attributes.push(AttributeType::Id(id.into()));
             }
             Some('>') => {
                 let text = &element[2..];
-                attributes.push(Attribute::new(
-                    text.to_string(),
-                    None,
-                    AttributeType::Text,
-                    mode,
-                ));
+                attributes.push(AttributeType::Text(text.into()));
             }
             _ => {}
         }
@@ -213,103 +170,99 @@ mod tests {
 
         #[test]
         fn empty_string_returns_no_attributes() {
-            assert!(parse_attribute("", &ParserMode::HTML).is_empty());
+            assert!(parse_attribute("").is_empty());
         }
 
         #[test]
         fn parses_single_class() {
-            let attrs = parse_attribute(".foo", &ParserMode::HTML);
+            let attrs = parse_attribute(".foo");
             assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].identifier, "foo");
-            assert!(attrs[0].value.is_none());
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Class));
+            assert_eq!(attrs[0], AttributeType::Class("foo".into()));
         }
 
         #[test]
         fn parses_multiple_classes() {
-            let attrs = parse_attribute(".flex.items-center.text-lg", &ParserMode::HTML);
+            let attrs = parse_attribute(".flex.items-center.text-lg");
             assert_eq!(attrs.len(), 3);
-            assert_eq!(attrs[0].identifier, "flex");
-            assert_eq!(attrs[1].identifier, "items-center");
-            assert_eq!(attrs[2].identifier, "text-lg");
-            assert!(
-                attrs
-                    .iter()
-                    .all(|a| matches!(a.attribute_type, AttributeType::Class))
-            );
+            assert_eq!(attrs[0], AttributeType::Class("flex".into()));
+            assert_eq!(attrs[1], AttributeType::Class("items-center".into()));
+            assert_eq!(attrs[2], AttributeType::Class("text-lg".into()));
         }
 
         #[test]
         fn parses_id() {
-            let attrs = parse_attribute("#my-id", &ParserMode::HTML);
+            let attrs = parse_attribute("#my-id");
             assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].identifier, "id");
-            assert_eq!(attrs[0].value, Some("my-id".to_string()));
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Id));
+            assert_eq!(attrs[0], AttributeType::Id("my-id".into()));
         }
 
         #[test]
         fn parses_prop_without_value() {
-            let attrs = parse_attribute(":disabled", &ParserMode::HTML);
+            let attrs = parse_attribute(":disabled");
             assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].identifier, "disabled");
-            assert!(attrs[0].value.is_none());
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Props));
+            assert_eq!(attrs[0], AttributeType::Props("disabled".into(), None));
         }
 
         #[test]
         fn parses_prop_with_simple_value() {
-            let attrs = parse_attribute(":type=text", &ParserMode::HTML);
+            let attrs = parse_attribute(":type=text");
             assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].identifier, "type");
-            assert_eq!(attrs[0].value.as_deref(), Some("text"));
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Props));
+            assert_eq!(
+                attrs[0],
+                AttributeType::Props("type".into(), Some("text".into()))
+            );
         }
 
         #[test]
         fn parses_prop_with_braced_value() {
-            let attrs = parse_attribute(":onClick={handler}", &ParserMode::HTML);
+            let attrs = parse_attribute(":onClick={handler}");
             assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].identifier, "onClick");
-            assert_eq!(attrs[0].value.as_deref(), Some("{handler}"));
+            assert_eq!(
+                attrs[0],
+                AttributeType::Props("onClick".into(), Some("{handler}".into()))
+            );
         }
 
         #[test]
         fn two_braced_props_are_separate() {
             // non-greedy +? must not merge :a={x}:b={y} into one match
-            let attrs = parse_attribute(":a={x}:b={y}", &ParserMode::HTML);
+            let attrs = parse_attribute(":a={x}:b={y}");
             assert_eq!(attrs.len(), 2);
-            assert_eq!(attrs[0].identifier, "a");
-            assert_eq!(attrs[0].value.as_deref(), Some("{x}"));
-            assert_eq!(attrs[1].identifier, "b");
-            assert_eq!(attrs[1].value.as_deref(), Some("{y}"));
+            assert_eq!(
+                attrs[0],
+                AttributeType::Props("a".into(), Some("{x}".into()))
+            );
+            assert_eq!(
+                attrs[1],
+                AttributeType::Props("b".into(), Some("{y}".into()))
+            );
         }
 
         #[test]
         fn parses_spread_syntax() {
-            let attrs = parse_attribute(":{...props}", &ParserMode::HTML);
+            let attrs = parse_attribute(":{...props}");
             assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].identifier, "{...props}");
-            assert!(attrs[0].value.is_none());
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Props));
+            assert_eq!(attrs[0], AttributeType::Props("{...props}".into(), None));
         }
 
         #[test]
         fn parses_text_content() {
-            let attrs = parse_attribute(">>Hello World", &ParserMode::HTML);
+            let attrs = parse_attribute(">>Hello World");
             assert_eq!(attrs.len(), 1);
-            assert_eq!(attrs[0].identifier, "Hello World");
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Text));
+            assert_eq!(attrs[0], AttributeType::Text("Hello World".into()));
         }
 
         #[test]
         fn parses_mixed_attributes_in_order() {
             // .class first, then #id, then :prop
-            let attrs = parse_attribute(".card#sidebar:aria-label=nav", &ParserMode::HTML);
+            let attrs = parse_attribute(".card#sidebar:aria-label=nav");
             assert_eq!(attrs.len(), 3);
-            assert!(matches!(attrs[0].attribute_type, AttributeType::Class));
-            assert!(matches!(attrs[1].attribute_type, AttributeType::Id));
-            assert!(matches!(attrs[2].attribute_type, AttributeType::Props));
+            assert_eq!(attrs[0], AttributeType::Class("card".into()));
+            assert_eq!(attrs[1], AttributeType::Id("sidebar".into()));
+            assert_eq!(
+                attrs[2],
+                AttributeType::Props("aria-label".into(), Some("nav".into()))
+            );
         }
     }
 
@@ -321,69 +274,44 @@ mod tests {
 
         #[test]
         fn id_renders_with_value() {
-            let a = Attribute::new(
-                "id".into(),
-                Some("main".into()),
-                AttributeType::Id,
-                &ParserMode::HTML,
-            );
-            assert_eq!(a.to_string(), " id=\"main\"");
+            let a = AttributeType::Id("main".into());
+            assert_eq!(a.render(ParserMode::HTML), " id=\"main\"");
         }
 
         #[test]
         fn id_renders_empty_string_when_value_is_none() {
-            let a = Attribute::new("id".into(), None, AttributeType::Id, &ParserMode::HTML);
-            assert_eq!(a.to_string(), " id=\"\"");
+            let a = AttributeType::Id("".into());
+            assert_eq!(a.render(ParserMode::HTML), " id=\"\"");
         }
 
         #[test]
         fn class_renders_with_leading_space() {
-            let a = Attribute::new("flex".into(), None, AttributeType::Class, &ParserMode::HTML);
-            assert_eq!(a.to_string(), " class=\"flex\"");
+            let a = AttributeType::Class("flex".into());
+            assert_eq!(a.render(ParserMode::HTML), " class=\"flex\"");
         }
 
         #[test]
         fn props_plain_value_is_quoted() {
-            let a = Attribute::new(
-                "href".into(),
-                Some("https://example.com".into()),
-                AttributeType::Props,
-                &ParserMode::HTML,
-            );
-            assert_eq!(a.to_string(), " href=\"https://example.com\"");
+            let a = AttributeType::Props("href".into(), Some("https://example.com".into()));
+            assert_eq!(a.render(ParserMode::HTML), " href=\"https://example.com\"");
         }
 
         #[test]
         fn props_braced_value_is_not_quoted() {
-            let a = Attribute::new(
-                "onClick".into(),
-                Some("{handler}".into()),
-                AttributeType::Props,
-                &ParserMode::JSX,
-            );
-            assert_eq!(a.to_string(), " onClick={handler}");
+            let a = AttributeType::Props("onClick".into(), Some("{handler}".into()));
+            assert_eq!(a.render(ParserMode::JSX), " onClick={handler}");
         }
 
         #[test]
         fn props_no_value_renders_as_boolean_attribute() {
-            let a = Attribute::new(
-                "disabled".into(),
-                None,
-                AttributeType::Props,
-                &ParserMode::HTML,
-            );
-            assert_eq!(a.to_string(), " disabled");
+            let a = AttributeType::Props("disabled".into(), None);
+            assert_eq!(a.render(ParserMode::HTML), " disabled");
         }
 
         #[test]
         fn text_renders_content_without_prefix() {
-            let a = Attribute::new(
-                "Hello World".into(),
-                None,
-                AttributeType::Text,
-                &ParserMode::HTML,
-            );
-            assert_eq!(a.to_string(), "Hello World");
+            let a = AttributeType::Text("Hello World".into());
+            assert_eq!(a.render(ParserMode::HTML), "Hello World");
         }
     }
 
@@ -395,58 +323,38 @@ mod tests {
 
         #[test]
         fn class_produces_dot_prefix() {
-            let a = Attribute::new("foo".into(), None, AttributeType::Class, &ParserMode::HTML);
+            let a = AttributeType::Class("foo".into());
             assert_eq!(a.to_glyf(), ".foo");
         }
 
         #[test]
         fn id_produces_hash_with_value() {
-            let a = Attribute::new(
-                "id".into(),
-                Some("main".into()),
-                AttributeType::Id,
-                &ParserMode::HTML,
-            );
+            let a = AttributeType::Id("main".into());
             assert_eq!(a.to_glyf(), "#main");
         }
 
         #[test]
         fn props_with_value_produces_colon_eq() {
-            let a = Attribute::new(
-                "href".into(),
-                Some("url".into()),
-                AttributeType::Props,
-                &ParserMode::HTML,
-            );
+            let a = AttributeType::Props("href".into(), Some("url".into()));
             assert_eq!(a.to_glyf(), ":href=url");
         }
 
         #[test]
         fn props_boolean_produces_colon_only() {
-            let a = Attribute::new(
-                "disabled".into(),
-                None,
-                AttributeType::Props,
-                &ParserMode::HTML,
-            );
+            let a = AttributeType::Props("disabled".into(), None);
             assert_eq!(a.to_glyf(), ":disabled");
         }
 
         #[test]
         fn text_produces_double_gt() {
-            let a = Attribute::new("Hello".into(), None, AttributeType::Text, &ParserMode::HTML);
+            let a = AttributeType::Text("Hello".into());
             assert_eq!(a.to_glyf(), ">>Hello");
         }
 
         #[test]
         fn props_with_braced_value_preserved() {
             // JSX expression values are kept as-is
-            let a = Attribute::new(
-                "onClick".into(),
-                Some("{handler}".into()),
-                AttributeType::Props,
-                &ParserMode::JSX,
-            );
+            let a = AttributeType::Props("onClick".into(), Some("{handler}".into()));
             assert_eq!(a.to_glyf(), ":onClick={handler}");
         }
     }

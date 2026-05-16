@@ -26,9 +26,9 @@ const INPUTS: &[(&str, &str)] = &[
 
 fn bench_expand(c: &mut Criterion) {
     let mut group = c.benchmark_group("parser/expand");
-    let config = Config {
-        mode: ParserMode::JSX,
-        snippets: HashMap::from([
+    let config = Config::new(
+        ParserMode::JSX,
+        HashMap::from([
             ("a".to_string(), "a:href".to_string()),
             ("br".to_string(), "br/".to_string()),
             ("hr".to_string(), "hr/".to_string()),
@@ -41,7 +41,8 @@ fn bench_expand(c: &mut Criterion) {
             ),
             ("input".to_string(), "input/".to_string()),
         ]),
-    };
+    );
+
     for (name, input) in INPUTS {
         group.bench_with_input(BenchmarkId::new("expand", name), input, |b, input| {
             b.iter(|| expand(input, None, Some(config.clone())).unwrap());
