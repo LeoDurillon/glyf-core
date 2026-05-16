@@ -40,11 +40,15 @@ mod snippet;
 mod types;
 mod utils;
 
+use std::sync::LazyLock;
+
+use regex::Regex;
+
 pub use error::GlyfError;
 pub use types::{Element, Node, NodeType};
 use utils::{find_at_depth_zero, get_multiplier};
 
-use crate::config::Config;
+use crate::{config::Config, parser::types::get_identifier_from_html};
 
 const IMPLICIT_DIV_PREFIXES: [char; 4] = [':', '.', '#', '>'];
 
@@ -238,6 +242,162 @@ pub fn parse_input(
     )
 }
 
+fn extract_tags_from_html(html: &str) -> Vec<&str> {
+    TAG_REGEX.find_iter(html).map(|t| t.as_str()).collect()
+}
+
+static TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(<[^<]*)").unwrap());
+
+pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<Element, GlyfError> {
+    let cleaned = html;
+    if cleaned.is_empty() {
+        return Err(GlyfError::NoIdentifier);
+    }
+    let tags = extract_tags_from_html(cleaned);
+
+    let (identifier, closing_tag_index) = get_identifier_from_html(&tags)?;
+
+    let close = closing_tag_index.map_or(1, |c| c + 1);
+    let siblings = if close < tags.len() {
+        &tags[close..]
+    } else {
+        &[]
+    };
+    let sibling = if !siblings.is_empty() {
+        Some(parse_html(&siblings.join(""), level, config)?)
+    } else {
+        None
+    };
+
+    // Self-closing: return immediately with optional sibling
+    if closing_tag_index.is_none() {
+        return Element::new(
+            Some(format!("{}/", identifier)),
+            None,
+            1,
+            sibling.map(|s| {
+                Box::new(Node {
+                    node: s,
+                    node_type: NodeType::Sibling,
+                })
+            }),
+            None,
+            config,
+        );
+    }
+
+    let mut children = None;
+    if let Some(close_idx) = closing_tag_index {
+        let inner = &tags[1..close_idx];
+        if let Ok(e) = parse_html(
+            &inner.join(""),
+            level.map_or(Some(1), |l| Some(l + 1)),
+            config,
+        ) {
+            children = Some(e);
+        }
+    }
+
+    // When both children and a sibling exist, wrap in a group so the
+    // sibling attaches at the right level: (element>children)+sibling
+    let mut group = None;
+    if sibling.is_some() && children.is_some() {
+        group = Some(Box::new(Element::new(
+            Some(identifier.clone()),
+            None,
+            1,
+            Some(Box::new(Node {
+                node: children.clone().unwrap(),
+                node_type: NodeType::Children,
+            })),
+            level,
+            config,
+        )?));
+    }
+
+    Element::new(
+        if group.is_some() {
+            None
+        } else {
+            Some(identifier)
+        },
+        group,
+        1,
+        sibling.map_or(
+            children.map(|c| {
+                Box::new(Node {
+                    node: c,
+                    node_type: NodeType::Children,
+                })
+            }),
+            |s| {
+                Some(Box::new(Node {
+                    node: s,
+                    node_type: NodeType::Sibling,
+                }))
+            },
+        ),
+        level,
+        config,
+    )
+}
+
+/// Converts an HTML/JSX string directly to a Glyf abbreviation without
+/// building an [`Element`] tree.
+///
+/// This is the fast path used by [`crate::compress`]. Children are connected
+/// with `>`, siblings with `+`, and an element that has both children and a
+/// sibling is wrapped in `(...)` so the sibling attaches at the correct level.
+///
+/// # Errors
+/// Returns [`GlyfError::NoIdentifier`] if `html` is empty or contains no
+/// valid HTML element.
+pub(super) fn html_to_glyf(html: &str) -> Result<String, GlyfError> {
+    let cleaned = html;
+    if cleaned.is_empty() {
+        return Err(GlyfError::NoIdentifier);
+    }
+    let tags = extract_tags_from_html(cleaned);
+    let (mut identifier, closing_tag_index) = get_identifier_from_html(&tags)?;
+
+    let is_self_closing = closing_tag_index.is_none();
+    if is_self_closing {
+        identifier.push('/')
+    }
+
+    let close = closing_tag_index.map_or(1, |c| c + 1);
+    let siblings = if close < tags.len() {
+        &tags[close..]
+    } else {
+        &[]
+    };
+
+    let child = if !is_self_closing {
+        let close_idx = closing_tag_index.unwrap();
+        let inner = &tags[1..close_idx];
+        if !inner.is_empty() {
+            html_to_glyf(&inner.join("")).ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let sibling = if !siblings.is_empty() {
+        Some(html_to_glyf(&siblings.join(""))?)
+    } else {
+        None
+    };
+
+    Ok(match (child, sibling) {
+        (Some(c), Some(s)) => format!("({}>{})+{}", identifier, c, s),
+        (Some(c), None) => format!("{}>{}", identifier, c),
+        (None, Some(s)) => format!("{}+{}", identifier, s),
+        (None, None) => identifier,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -269,6 +429,7 @@ mod tests {
     // -------------------------------------------------------------------------
     // parse_input
     // -------------------------------------------------------------------------
+    #[cfg(test)]
     mod parse_input_tests {
         use crate::parser::attribute::AttributeType;
 
@@ -505,6 +666,7 @@ mod tests {
     // -------------------------------------------------------------------------
     // parse_group
     // -------------------------------------------------------------------------
+    #[cfg(test)]
     mod parse_group_tests {
         use super::*;
 
@@ -603,6 +765,7 @@ mod tests {
     // -------------------------------------------------------------------------
     // Display for Element
     // -------------------------------------------------------------------------
+    #[cfg(test)]
     mod element_display_tests {
         use super::*;
 
@@ -873,6 +1036,7 @@ mod tests {
     // -------------------------------------------------------------------------
     // Custom snippets — parse_input + parse_group integration
     // -------------------------------------------------------------------------
+    #[cfg(test)]
     mod custom_snippet_tests {
         use super::*;
 
@@ -993,6 +1157,283 @@ mod tests {
                 ok(parse_input("mc+div", None, &config)).to_string(),
                 "<MyComponent></MyComponent>\n<div></div>"
             );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_html
+    // -------------------------------------------------------------------------
+    #[cfg(test)]
+    mod parse_html_tests {
+        use super::*;
+
+        fn cfg() -> Config {
+            Config::default()
+        }
+
+        /// Parse HTML and immediately return the rendered string.
+        fn compress(html: &str) -> String {
+            parse_html(html, None, &cfg())
+                .expect("parse_html failed")
+                .to_string()
+        }
+
+        // ── simple elements ─────────────────────────────────────────────────
+
+        #[test]
+        fn simple_element_round_trips() {
+            assert_eq!(compress("<div></div>"), "<div></div>");
+        }
+
+        #[test]
+        fn element_with_single_class() {
+            assert_eq!(
+                compress("<div class=\"foo\"></div>"),
+                "<div class=\"foo\"></div>"
+            );
+        }
+
+        #[test]
+        fn element_with_multiple_classes() {
+            // "foo bar" → .foo.bar → class="foo bar" preserved
+            assert_eq!(
+                compress("<div class=\"foo bar\"></div>"),
+                "<div class=\"foo bar\"></div>"
+            );
+        }
+
+        #[test]
+        fn element_with_id() {
+            assert_eq!(compress("<div id=\"app\"></div>"), "<div id=\"app\"></div>");
+        }
+
+        #[test]
+        fn element_with_prop() {
+            assert_eq!(
+                compress("<a href=\"https://example.com\"></a>"),
+                "<a href=\"https://example.com\"></a>"
+            );
+        }
+
+        #[test]
+        fn element_with_text_content() {
+            assert_eq!(compress("<p>Hello world</p>"), "<p>Hello world</p>");
+        }
+
+        // ── attribute ordering ───────────────────────────────────────────────
+        // Glyf renders: Id < Props < Class regardless of HTML input order.
+
+        #[test]
+        fn id_and_class_both_preserved() {
+            let html = compress("<div id=\"main\" class=\"card\"></div>");
+            assert!(html.contains("id=\"main\""), "id missing from output");
+            assert!(html.contains("class=\"card\""), "class missing from output");
+        }
+
+        #[test]
+        fn id_renders_before_class_regardless_of_html_order() {
+            // Glyf attribute ordering: Id(0) < Props(1) < Class(2)
+            let html = compress("<div class=\"card\" id=\"main\"></div>");
+            assert!(html.find("id").unwrap() < html.find("class").unwrap());
+        }
+
+        // ── self-closing ────────────────────────────────────────────────────
+
+        #[test]
+        fn explicit_self_closing() {
+            assert_eq!(compress("<br />"), "<br />");
+        }
+
+        #[test]
+        fn void_element_without_slash() {
+            // HTML4-style void element treated as self-closing
+            assert_eq!(compress("<br>"), "<br />");
+        }
+
+        #[test]
+        fn self_closing_with_attribute() {
+            assert_eq!(
+                compress("<img src=\"photo.jpg\" />"),
+                "<img src=\"photo.jpg\" />"
+            );
+        }
+
+        #[test]
+        fn self_closing_with_sibling() {
+            assert_eq!(compress("<br /><span></span>"), "<br />\n<span></span>");
+        }
+
+        // ── siblings ───────────────────────────────────────────────────────
+
+        #[test]
+        fn two_sibling_elements() {
+            assert_eq!(
+                compress("<div></div><span></span>"),
+                "<div></div>\n<span></span>"
+            );
+        }
+
+        #[test]
+        fn three_sibling_elements() {
+            assert_eq!(
+                compress("<h1></h1><p></p><footer></footer>"),
+                "<h1></h1>\n<p></p>\n<footer></footer>"
+            );
+        }
+
+        // ── children ───────────────────────────────────────────────────────
+
+        #[test]
+        fn element_with_single_child() {
+            assert_eq!(compress("<div><p></p></div>"), "<div>\n\t<p></p>\n</div>");
+        }
+
+        #[test]
+        fn deeply_nested_children() {
+            assert_eq!(
+                compress("<div><p><span></span></p></div>"),
+                "<div>\n\t<p>\n\t\t<span></span>\n\t</p>\n</div>"
+            );
+        }
+
+        #[test]
+        fn child_with_class() {
+            assert_eq!(
+                compress("<div><p class=\"title\"></p></div>"),
+                "<div>\n\t<p class=\"title\"></p>\n</div>"
+            );
+        }
+
+        #[test]
+        fn child_with_text_content() {
+            assert_eq!(
+                compress("<div><p>Hello</p></div>"),
+                "<div>\n\t<p>Hello</p>\n</div>"
+            );
+        }
+
+        // ── children + siblings ─────────────────────────────────────────────
+
+        #[test]
+        fn element_with_child_and_sibling() {
+            // <div><p></p></div><span></span>  →  (div>p)+span
+            assert_eq!(
+                compress("<div><p></p></div><span></span>"),
+                "<div>\n\t<p></p>\n</div>\n<span></span>"
+            );
+        }
+
+        // ── errors ───────────────────────────────────────────────────────
+
+        #[test]
+        fn empty_input_returns_err() {
+            assert!(parse_html("", None, &cfg()).is_err());
+        }
+
+        #[test]
+        fn whitespace_only_returns_err() {
+            assert!(parse_html("  ", None, &cfg()).is_err());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // html_to_glyf
+    // -------------------------------------------------------------------------
+    mod html_to_glyf_tests {
+        use super::*;
+
+        #[test]
+        fn simple_element() {
+            assert_eq!(html_to_glyf("<div></div>").unwrap(), "div");
+        }
+
+        #[test]
+        fn element_with_class() {
+            assert_eq!(
+                html_to_glyf("<div class=\"foo\"></div>").unwrap(),
+                "div.foo"
+            );
+        }
+
+        #[test]
+        fn element_with_id() {
+            assert_eq!(html_to_glyf("<div id=\"main\"></div>").unwrap(), "div#main");
+        }
+
+        #[test]
+        fn element_with_prop() {
+            assert_eq!(html_to_glyf("<a href=\"url\"></a>").unwrap(), "a:href=url");
+        }
+
+        #[test]
+        fn element_with_text_content() {
+            assert_eq!(html_to_glyf("<p>Hello</p>").unwrap(), "p>>Hello");
+        }
+
+        #[test]
+        fn element_with_multiple_classes() {
+            assert_eq!(
+                html_to_glyf("<div class=\"foo bar\"></div>").unwrap(),
+                "div.foo.bar"
+            );
+        }
+
+        #[test]
+        fn self_closing_explicit() {
+            assert_eq!(html_to_glyf("<br />").unwrap(), "br/");
+        }
+
+        #[test]
+        fn void_element() {
+            assert_eq!(html_to_glyf("<br>").unwrap(), "br/");
+        }
+
+        #[test]
+        fn self_closing_with_sibling() {
+            assert_eq!(html_to_glyf("<br /><span></span>").unwrap(), "br/+span");
+        }
+
+        #[test]
+        fn element_with_child() {
+            assert_eq!(html_to_glyf("<div><p></p></div>").unwrap(), "div>p");
+        }
+
+        #[test]
+        fn element_with_siblings() {
+            assert_eq!(
+                html_to_glyf("<div></div><span></span>").unwrap(),
+                "div+span"
+            );
+        }
+
+        #[test]
+        fn element_with_child_and_sibling() {
+            assert_eq!(
+                html_to_glyf("<div><p></p></div><span></span>").unwrap(),
+                "(div>p)+span"
+            );
+        }
+
+        #[test]
+        fn deeply_nested() {
+            assert_eq!(
+                html_to_glyf("<div><p><span></span></p></div>").unwrap(),
+                "div>p>span"
+            );
+        }
+
+        #[test]
+        fn url_prop_colon_wrapped_in_braces() {
+            // colons in values are escaped with {} to survive Glyf attribute parsing
+            assert_eq!(
+                html_to_glyf("<a href=\"https://example.com\"></a>").unwrap(),
+                "a:href={https://example.com}"
+            );
+        }
+
+        #[test]
+        fn empty_input_returns_err() {
+            assert!(html_to_glyf("").is_err());
         }
     }
 }

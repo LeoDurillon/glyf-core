@@ -183,6 +183,64 @@ impl Element {
             mode,
         })
     }
+
+    /// Converts this element tree to its Glyf abbreviation string.
+    ///
+    /// The inverse of constructing an element via [`crate::expand`] — produces
+    /// the Glyf abbreviation that would generate equivalent HTML/JSX.
+    /// Attributes are emitted in compress order: `.class` before `#id` before
+    /// `:prop` before `>>text`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glyf_core::parser::parse_input;
+    /// use glyf_core::config::Config;
+    ///
+    /// let el = parse_input("div.foo>p", None, &Config::default()).unwrap();
+    /// assert_eq!(el.to_glyf(), "div.foo>p");
+    /// ```
+    pub fn to_glyf(&self) -> String {
+        let mut result = String::new();
+        if let Some(identifier) = &self.identifier {
+            result.push_str(identifier);
+            if let Some(attributes) = &self.attributes {
+                let mut glyf_attribute = attributes
+                    .iter()
+                    .map(|attr| attr.to_glyf())
+                    .collect::<Vec<String>>();
+                glyf_attribute.sort_by_key(|k| match k.chars().next() {
+                    Some('.') => 0, // class
+                    Some('#') => 1, // id
+                    Some(':') => 2, // props
+                    Some('>') => 3, // text content
+                    _ => 4,
+                });
+                result.push_str(&glyf_attribute.join(""));
+            }
+            if self.self_closing {
+                result.push('/');
+            }
+        } else if let Some(group) = &self.group {
+            result.push_str(&format!("({})", group.to_glyf()))
+        }
+
+        if self.multiplier > 1 {
+            result.push_str(&format!("*{}", self.multiplier));
+        }
+
+        if let Some(node) = &self.node {
+            result.push_str(
+                match node.node_type {
+                    NodeType::Sibling => format!("+{}", node.node.to_glyf()),
+                    NodeType::Children => format!(">{}", node.node.to_glyf()),
+                }
+                .as_str(),
+            );
+        }
+
+        result
+    }
 }
 
 impl Display for Element {
@@ -279,6 +337,107 @@ impl Display for Element {
 
         write!(f, "{}{}", repeated, sibling_output)
     }
+}
+
+static ATTRIBUTE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"([a-zA-Z-]+=(?:\{.+?\}|["'].+?["'])|[a-zA-Z]+|>.+$)"#).unwrap());
+
+const VOID_ELEMENTS: &[&str] = &[
+    "br", "hr", "img", "input", "col", "area", "base", "link", "meta", "param", "source", "track",
+    "wbr", "embed", "keygen", "command",
+];
+
+/// Extracts the Glyf identifier and closing-tag position from a slice of HTML tokens.
+///
+/// Each token in `tags` is a `<tag ...>text` string as produced by the HTML
+/// tokeniser (`TAG_REGEX`). Returns:
+/// - The Glyf identifier string (e.g. `"div.foo#main"`) with attributes already
+///   sorted in compress order (class → id → props → text).
+/// - `Some(index)` — the index in `tags` of the matching closing tag.
+/// - `None` — the element is self-closing (void element or `/>` suffix).
+///
+/// # Errors
+/// Returns [`GlyfError::NoIdentifier`] when `tags` is empty, the tag name
+/// cannot be extracted, or a non-self-closing element has no matching close.
+pub(super) fn get_identifier_from_html(
+    tags: &[&str],
+) -> Result<(String, Option<usize>), GlyfError> {
+    let Some(&first_tag) = tags.first() else {
+        return Err(GlyfError::NoIdentifier);
+    };
+
+    let Some(tagname) = first_tag.split(['>', ' ', '<']).nth(1) else {
+        return Err(GlyfError::NoIdentifier);
+    };
+
+    let mut attributes = ATTRIBUTE_REGEX
+        .find_iter(&first_tag[tagname.len() + 1..])
+        .map(|t| {
+            let str = t.as_str();
+            let mut parts = str.splitn(2, '=');
+            let identifier = parts.next().unwrap();
+            let Some(value) = parts.next() else {
+                if str.starts_with('>') {
+                    return format!(">{}", &str);
+                }
+                return format!(":{}", str);
+            };
+            match identifier {
+                "class" | "className" => {
+                    let clean = value.replace(['"', '\''], "");
+                    clean.split_whitespace().map(|c| format!(".{c}")).collect()
+                }
+                "id" => format!("#{}", value.replace(['"', '\''], "")),
+                _ => {
+                    let mut cleaned = value.replace(['"', '\''], "");
+                    if cleaned.contains([':', '.', '>']) {
+                        cleaned = format!("{{{}}}", cleaned);
+                    }
+                    format!(":{}={}", identifier, cleaned)
+                }
+            }
+        })
+        .collect::<Vec<String>>();
+
+    attributes.sort_by_key(|k| match k.chars().next() {
+        Some('.') => 0, // class
+        Some('#') => 1, // id
+        Some(':') => 2, // props
+        Some('>') => 3, // text content
+        _ => 4,
+    });
+
+    let is_self_closing = first_tag.ends_with("/>") || VOID_ELEMENTS.contains(&tagname);
+
+    let mut closing_tag_index = None;
+    if !is_self_closing {
+        let mut depth = 0;
+        let open_prefix = format!("<{}", tagname);
+        let close_prefix = format!("</{}", tagname);
+        for (i, tag) in tags[1..].iter().enumerate() {
+            if tag.split(['>', ' ']).next() == Some(&open_prefix) {
+                depth += 1;
+                continue;
+            }
+            if tag.split(['>', ' ']).next() == Some(&close_prefix) {
+                if depth > 0 {
+                    depth -= 1;
+                    continue;
+                }
+                closing_tag_index = Some(i + 1);
+                break;
+            }
+        }
+    }
+
+    if !is_self_closing && closing_tag_index.is_none() {
+        return Err(GlyfError::NoIdentifier);
+    }
+
+    Ok((
+        format!("{}{}", tagname, &attributes.join("")),
+        closing_tag_index,
+    ))
 }
 
 #[cfg(test)]
@@ -519,6 +678,181 @@ mod tests {
                 e.to_string(),
                 "<div class=\"card\">\n\t<p></p>\n</div>\n<footer></footer>"
             );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Element::to_glyf
+    // -------------------------------------------------------------------------
+    mod element_to_glyf_tests {
+        use super::*;
+
+        fn cfg() -> Config {
+            Config::default()
+        }
+
+        #[test]
+        fn simple_element() {
+            let e = Element::new(Some("div".into()), None, 1, None, None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "div");
+        }
+
+        #[test]
+        fn element_with_class() {
+            let e = Element::new(Some("div.foo".into()), None, 1, None, None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "div.foo");
+        }
+
+        #[test]
+        fn element_with_id() {
+            let e = Element::new(Some("div#main".into()), None, 1, None, None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "div#main");
+        }
+
+        #[test]
+        fn element_with_prop() {
+            let e = Element::new(Some("a:href=url".into()), None, 1, None, None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "a:href=url");
+        }
+
+        #[test]
+        fn element_with_text_content() {
+            let e = Element::new(Some("p>>Hello".into()), None, 1, None, None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "p>>Hello");
+        }
+
+        #[test]
+        fn self_closing_element() {
+            let e = Element::new(Some("br/".into()), None, 1, None, None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "br/");
+        }
+
+        #[test]
+        fn element_with_multiplier() {
+            let e = Element::new(Some("li".into()), None, 3, None, None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "li*3");
+        }
+
+        #[test]
+        fn element_with_child() {
+            let e = parse_input("div>p", None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "div>p");
+        }
+
+        #[test]
+        fn element_with_sibling() {
+            let e = parse_input("div+span", None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "div+span");
+        }
+
+        #[test]
+        fn attributes_sorted_class_before_id() {
+            // to_glyf uses compress order: class first, then id
+            let e = Element::new(Some("div#main.foo".into()), None, 1, None, None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "div.foo#main");
+        }
+
+        #[test]
+        fn chained_children() {
+            let e = parse_input("div>p>span", None, &cfg()).unwrap();
+            assert_eq!(e.to_glyf(), "div>p>span");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // get_identifier_from_html
+    // -------------------------------------------------------------------------
+    mod get_identifier_from_html_tests {
+        use super::*;
+
+        #[test]
+        fn simple_tag_returns_tagname() {
+            let tags = vec!["<div>", "</div>"];
+            let (id, close) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "div");
+            assert_eq!(close, Some(1));
+        }
+
+        #[test]
+        fn tag_with_class() {
+            let tags = vec!["<div class=\"foo\">", "</div>"];
+            let (id, _) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "div.foo");
+        }
+
+        #[test]
+        fn tag_with_id() {
+            let tags = vec!["<div id=\"main\">", "</div>"];
+            let (id, _) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "div#main");
+        }
+
+        #[test]
+        fn tag_with_prop() {
+            let tags = vec!["<a href=\"url\">", "</a>"];
+            let (id, _) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "a:href=url");
+        }
+
+        #[test]
+        fn tag_with_multiple_classes() {
+            let tags = vec!["<div class=\"foo bar\">", "</div>"];
+            let (id, _) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "div.foo.bar");
+        }
+
+        #[test]
+        fn tag_with_text_content() {
+            // TAG_REGEX produces "<p>Hello" when text follows the tag immediately
+            let tags = vec!["<p>Hello", "</p>"];
+            let (id, close) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "p>>Hello");
+            assert_eq!(close, Some(1));
+        }
+
+        #[test]
+        fn self_closing_explicit() {
+            let tags = vec!["<br />"];
+            let (id, close) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "br");
+            assert_eq!(close, None);
+        }
+
+        #[test]
+        fn void_element_without_slash() {
+            let tags = vec!["<br>"];
+            let (id, close) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "br");
+            assert_eq!(close, None);
+        }
+
+        #[test]
+        fn closing_tag_index_accounts_for_children() {
+            // <div><p></p></div>
+            let tags = vec!["<div>", "<p>", "</p>", "</div>"];
+            let (_, close) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(close, Some(3));
+        }
+
+        #[test]
+        fn nested_same_name_depth_tracking() {
+            // <div><div></div></div> — inner </div> must not close the outer
+            let tags = vec!["<div>", "<div>", "</div>", "</div>"];
+            let (_, close) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(close, Some(3));
+        }
+
+        #[test]
+        fn attributes_sorted_class_before_id() {
+            // Compress order: class(0) < id(1)
+            let tags = vec!["<div id=\"main\" class=\"card\">", "</div>"];
+            let (id, _) = get_identifier_from_html(&tags).unwrap();
+            assert_eq!(id, "div.card#main");
+        }
+
+        #[test]
+        fn empty_tags_returns_err() {
+            assert!(get_identifier_from_html(&[]).is_err());
         }
     }
 }

@@ -25,7 +25,7 @@
 use crate::{
     checker::input_correctly_close,
     config::Config,
-    parser::{GlyfError, parse_input},
+    parser::{GlyfError, html_to_glyf, parse_input},
 };
 
 pub mod checker;
@@ -123,8 +123,83 @@ pub fn expand(
         return Err(GlyfError::UnmatchedBrackets);
     }
 
-    match parse_input(abbr, base_level, &config) {
-        Ok(node) => Ok(node.to_string()),
-        Err(e) => Err(e),
+    parse_input(abbr, base_level, &config).map(|node| node.to_string())
+}
+
+/// Compresses an HTML or JSX string into its Glyf abbreviation.
+///
+/// This is the inverse of [`expand`]: given HTML markup, it produces the
+/// shortest Glyf abbreviation that would regenerate equivalent output.
+///
+/// # Errors
+///
+/// Returns [`GlyfError::NoIdentifier`] if `html` is empty or contains
+/// no valid HTML element.
+///
+/// # Examples
+///
+/// ```
+/// use glyf_core::compress;
+///
+/// assert_eq!(compress("<div></div>").unwrap(), "div");
+/// assert_eq!(compress("<div class=\"foo\"></div>").unwrap(), "div.foo");
+/// assert_eq!(compress("<div><p></p></div>").unwrap(), "div>p");
+/// assert_eq!(compress("<div></div><span></span>").unwrap(), "div+span");
+/// assert_eq!(compress("<div><p></p></div><span></span>").unwrap(), "(div>p)+span");
+/// ```
+pub fn compress(html: &str) -> Result<String, GlyfError> {
+    html_to_glyf(html)
+}
+
+#[cfg(test)]
+mod compress_tests {
+    use super::*;
+
+    #[test]
+    fn simple_element() {
+        assert_eq!(compress("<div></div>").unwrap(), "div");
+    }
+
+    #[test]
+    fn element_with_class() {
+        assert_eq!(compress("<div class=\"foo\"></div>").unwrap(), "div.foo");
+    }
+
+    #[test]
+    fn element_with_id() {
+        assert_eq!(compress("<div id=\"main\"></div>").unwrap(), "div#main");
+    }
+
+    #[test]
+    fn element_with_child() {
+        assert_eq!(compress("<div><p></p></div>").unwrap(), "div>p");
+    }
+
+    #[test]
+    fn element_with_siblings() {
+        assert_eq!(compress("<div></div><span></span>").unwrap(), "div+span");
+    }
+
+    #[test]
+    fn element_with_child_and_sibling() {
+        assert_eq!(
+            compress("<div><p></p></div><span></span>").unwrap(),
+            "(div>p)+span"
+        );
+    }
+
+    #[test]
+    fn self_closing_explicit() {
+        assert_eq!(compress("<br />").unwrap(), "br/");
+    }
+
+    #[test]
+    fn void_element() {
+        assert_eq!(compress("<br>").unwrap(), "br/");
+    }
+
+    #[test]
+    fn empty_input_returns_err() {
+        assert!(compress("").is_err());
     }
 }

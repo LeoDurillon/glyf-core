@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use glyf_core::{config::Config, expand};
+use glyf_core::{
+    config::{Config, ParserMode},
+    expand,
+};
 
-// The same inputs fed to both algorithms
 const INPUTS: &[(&str, &str)] = &[
     ("simple", "div"),
     ("class", "div.foo.bar"),
@@ -16,17 +18,16 @@ const INPUTS: &[(&str, &str)] = &[
     ("nested", "div>(div>(div>p)+p)+p"),
     ("snippet", "a"),
     ("fragment", "e>label+input:c"),
-    // The complex Tailwind query from the old tests
     (
         "complex",
         "div.fixed.bottom-0.left-0.right-0.top-0.z-20.flex>div.flex.flex-col.items-center>(div.delay>Logo.size-40:fill=white/)+div>Form.bg-surface:action={login}>(div>p>>Connexion+Icon:icon=lock/)+(div>Textfield:label=Email:type=email/+Textfield:label=Password:type=password/)+div>Button:type=submit>>Login",
     ),
 ];
 
-fn bench_parser(c: &mut Criterion) {
-    let mut group = c.benchmark_group("parser");
+fn bench_expand(c: &mut Criterion) {
+    let mut group = c.benchmark_group("parser/expand");
     let config = Config {
-        mode: glyf_core::config::ParserMode::JSX,
+        mode: ParserMode::JSX,
         snippets: HashMap::from([
             ("a".to_string(), "a:href".to_string()),
             ("br".to_string(), "br/".to_string()),
@@ -43,15 +44,11 @@ fn bench_parser(c: &mut Criterion) {
     };
     for (name, input) in INPUTS {
         group.bench_with_input(BenchmarkId::new("expand", name), input, |b, input| {
-            b.iter(|| {
-                expand(input, None, Some(config.clone()))
-                    .unwrap()
-                    .to_string()
-            });
+            b.iter(|| expand(input, None, Some(config.clone())).unwrap());
         });
     }
     group.finish();
 }
 
-criterion_group!(benches, bench_parser);
+criterion_group!(benches, bench_expand);
 criterion_main!(benches);

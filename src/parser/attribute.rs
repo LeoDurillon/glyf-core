@@ -65,6 +65,36 @@ impl Attribute {
             mode: *mode,
         }
     }
+
+    /// Converts this attribute to its Glyf abbreviation notation.
+    ///
+    /// | Type | Example HTML | Glyf output |
+    /// |------|-------------|-------------|
+    /// | `Class` | `class="foo"` | `.foo` |
+    /// | `Id` | `id="main"` | `#main` |
+    /// | `Props` with value | `href="url"` | `:href=url` |
+    /// | `Props` boolean | `disabled` | `:disabled` |
+    /// | `Text` | text content `Hello` | `>>Hello` |
+    pub fn to_glyf(&self) -> String {
+        match self.attribute_type {
+            AttributeType::Class => {
+                format!(".{}", self.identifier)
+            }
+            AttributeType::Text => {
+                format!(">>{}", self.identifier)
+            }
+            AttributeType::Id => {
+                format!("#{}", self.value.as_deref().unwrap_or(""))
+            }
+            AttributeType::Props => {
+                if let Some(value) = &self.value {
+                    format!(":{}={}", self.identifier, value)
+                } else {
+                    format!(":{}", self.identifier)
+                }
+            }
+        }
+    }
 }
 
 impl Display for Attribute {
@@ -87,8 +117,13 @@ impl Display for Attribute {
             }
             AttributeType::Props => {
                 if let Some(value) = self.value.as_deref() {
-                    let formatted = if !value.starts_with("{") || self.mode == ParserMode::HTML {
-                        format!("\"{}\"", value)
+                    let formatted = if self.mode == ParserMode::HTML {
+                        let stripped = if value.starts_with('{') && value.ends_with('}') {
+                            &value[1..value.len() - 1]
+                        } else {
+                            value
+                        };
+                        format!("\"{}\"", stripped)
                     } else {
                         value.to_string()
                     };
@@ -349,6 +384,70 @@ mod tests {
                 &ParserMode::HTML,
             );
             assert_eq!(a.to_string(), "Hello World");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Attribute::to_glyf
+    // -------------------------------------------------------------------------
+    mod attribute_to_glyf_tests {
+        use super::*;
+
+        #[test]
+        fn class_produces_dot_prefix() {
+            let a = Attribute::new("foo".into(), None, AttributeType::Class, &ParserMode::HTML);
+            assert_eq!(a.to_glyf(), ".foo");
+        }
+
+        #[test]
+        fn id_produces_hash_with_value() {
+            let a = Attribute::new(
+                "id".into(),
+                Some("main".into()),
+                AttributeType::Id,
+                &ParserMode::HTML,
+            );
+            assert_eq!(a.to_glyf(), "#main");
+        }
+
+        #[test]
+        fn props_with_value_produces_colon_eq() {
+            let a = Attribute::new(
+                "href".into(),
+                Some("url".into()),
+                AttributeType::Props,
+                &ParserMode::HTML,
+            );
+            assert_eq!(a.to_glyf(), ":href=url");
+        }
+
+        #[test]
+        fn props_boolean_produces_colon_only() {
+            let a = Attribute::new(
+                "disabled".into(),
+                None,
+                AttributeType::Props,
+                &ParserMode::HTML,
+            );
+            assert_eq!(a.to_glyf(), ":disabled");
+        }
+
+        #[test]
+        fn text_produces_double_gt() {
+            let a = Attribute::new("Hello".into(), None, AttributeType::Text, &ParserMode::HTML);
+            assert_eq!(a.to_glyf(), ">>Hello");
+        }
+
+        #[test]
+        fn props_with_braced_value_preserved() {
+            // JSX expression values are kept as-is
+            let a = Attribute::new(
+                "onClick".into(),
+                Some("{handler}".into()),
+                AttributeType::Props,
+                &ParserMode::JSX,
+            );
+            assert_eq!(a.to_glyf(), ":onClick={handler}");
         }
     }
 }

@@ -21,5 +21,13 @@ regex = "1.12.3"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 
 [[bench]]
-name = "parser_benchmark"
+name = "expand_benchmark"
+harness = false
+
+[[bench]]
+name = "compress_benchmark"
+harness = false
+
+[[bench]]
+name = "element_benchmark"
 harness = false
