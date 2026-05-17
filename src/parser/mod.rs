@@ -86,9 +86,8 @@ pub(super) fn parse_group(
         sibling = Some(scoped_sibling);
     }
 
-    Element::new(
-        None,
-        Some(Box::new(parsed_element)),
+    Ok(Element::from_group(
+        Box::new(parsed_element),
         multiplier,
         sibling.map(|sibling| {
             Box::new(Node {
@@ -97,8 +96,8 @@ pub(super) fn parse_group(
             })
         }),
         level,
-        config,
-    )
+        config.mode,
+    ))
 }
 
 /// Parses an Glyf abbreviation string into an [`Element`] tree.
@@ -149,17 +148,9 @@ pub(super) fn parse_input(
     };
 
     if element.len() == formatted.len() {
-        return Element::new(
-            Some(element_value.to_string()),
-            None,
-            multiplier,
-            None,
-            level,
-            config,
-        );
+        return Element::from_abbr(element_value, multiplier, None, level, config);
     }
 
-    let current_level = level.unwrap_or(0);
     let node_type = if first_down.0.len() < first_sibling.0.len() {
         NodeType::Children
     } else {
@@ -168,24 +159,15 @@ pub(super) fn parse_input(
 
     let next_element = parse_input(
         &formatted[element.len() + 1..],
-        if node_type == NodeType::Children {
-            Some(current_level + 1)
-        } else {
-            Some(current_level)
-        },
+        node_type.next_level(level),
         config,
-    );
+    )?;
 
-    if next_element.is_err() {
-        return Err(next_element.err().unwrap());
-    }
-
-    Element::new(
-        Some(element_value.to_string()),
-        None,
+    Element::from_abbr(
+        element_value,
         multiplier,
         Some(Box::new(Node {
-            node: next_element.ok().unwrap(),
+            node: next_element,
             node_type,
         })),
         level,

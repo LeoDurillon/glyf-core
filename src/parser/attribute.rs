@@ -16,11 +16,6 @@ use regex::Regex;
 
 use crate::config::ParserMode;
 
-pub trait Render {
-    fn render(&self, mode: ParserMode) -> String;
-    fn to_glyf(&self) -> String;
-}
-
 static ATTRIBUTE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(:\{.+?\}|:[\w$-]+=\{.+?\}|:[\w$-]+=[^:>+]+|:[\w$-]+|\.[\w\/-]+|#\{.+?\}|#[\w-]+|>>.+$)",
@@ -31,37 +26,32 @@ static ATTRIBUTE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// Classifies how a parsed attribute maps to its HTML/JSX output.
 ///
 /// The ordering of variants is meaningful: `sort_by` on `AttributeType`
-/// places `Id` before `Props` before `Class` before `Text`, which ensures
+/// places `Class` before `Id` before `Props` before `Text`, which ensures
 /// a predictable attribute output order regardless of abbreviation order.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum AttributeType {
+    /// `.name` — all classes are aggregated into a single `class="a b c"` attribute.
+    Class(String),
     /// `#value` — rendered as `id="value"`.
     Id(String),
     /// `:key` or `:key=value` — rendered as `key` or `key="value"` / `key={value}`.
     Props(String, Option<String>),
-    /// `.name` — all classes are aggregated into a single `class="a b c"` attribute.
-    Class(String),
     /// `>>text` — placed as inner content between opening and closing tags.
     Text(String),
 }
 
-impl Render for AttributeType {
-    fn render(&self, mode: ParserMode) -> String {
+impl AttributeType {
+    pub fn render(&self, mode: ParserMode) -> String {
         match self {
-            AttributeType::Id(id) => {
-                if mode == ParserMode::JSX && id.starts_with('{') {
-                    format!(" id={}", id)
-                } else {
-                    format!(" id=\"{}\"", id)
-                }
-            }
-            AttributeType::Class(class) => {
-                if mode == ParserMode::HTML {
-                    format!(" class=\"{}\"", class)
-                } else {
-                    format!(" className=\"{}\"", class)
-                }
-            }
+            AttributeType::Id(id) => match (mode, id.starts_with('{') && id.ends_with('}')) {
+                (ParserMode::JSX, true) => format!(" id={}", id),
+                (ParserMode::HTML, true) => format!(" id=\"{}\"", &id[1..id.len() - 1]),
+                _ => format!(" id=\"{}\"", id),
+            },
+            AttributeType::Class(class) => match mode {
+                ParserMode::HTML => format!(" class=\"{}\"", class),
+                ParserMode::JSX => format!(" className=\"{}\"", class),
+            },
             AttributeType::Props(identifier, value) => {
                 if let Some(value) = value.as_deref() {
                     let formatted = if mode == ParserMode::HTML {
@@ -70,9 +60,9 @@ impl Render for AttributeType {
                         } else {
                             value
                         };
-                        &format!("\"{}\"", stripped)
+                        format!("\"{}\"", stripped)
                     } else {
-                        value
+                        value.to_owned()
                     };
 
                     format!(" {}={}", identifier, formatted)
@@ -93,7 +83,7 @@ impl Render for AttributeType {
     /// | `Props` with value | `href="url"` | `:href=url` |
     /// | `Props` boolean | `disabled` | `:disabled` |
     /// | `Text` | text content `Hello` | `>>Hello` |
-    fn to_glyf(&self) -> String {
+    pub fn to_glyf(&self) -> String {
         match self {
             AttributeType::Class(class) => {
                 format!(".{}", class)
@@ -124,38 +114,26 @@ impl Render for AttributeType {
 /// - `{expr}` — kept as-is in JSX mode; wrapped in `"quotes"` in HTML mode
 /// - `plain`  — always wrapped in `"quotes"`
 pub fn parse_attribute(attributes: &str) -> Vec<AttributeType> {
-    let matcher = ATTRIBUTE_REGEX.find_iter(attributes);
-    let mut attributes: Vec<AttributeType> = Vec::new();
-    for capture in matcher.into_iter() {
-        let element = capture.as_str();
-        match element.chars().next() {
-            Some(':') => {
-                let parts: Vec<&str> = element[1..].splitn(2, '=').collect();
-                let identifier = parts[0];
-                let value = if parts.len() > 1 {
-                    Some(parts[1].to_string())
-                } else {
-                    None
-                };
-                attributes.push(AttributeType::Props(identifier.into(), value));
+    ATTRIBUTE_REGEX
+        .find_iter(attributes)
+        .filter_map(|cap| {
+            let s = cap.as_str();
+            match s.chars().next()? {
+                ':' => {
+                    let mut parts = s[1..].splitn(2, '=');
+                    let key = parts.next()?;
+                    Some(AttributeType::Props(
+                        key.into(),
+                        parts.next().map(str::to_owned),
+                    ))
+                }
+                '.' => Some(AttributeType::Class(s[1..].into())),
+                '#' => Some(AttributeType::Id(s[1..].into())),
+                '>' => Some(AttributeType::Text(s[2..].into())),
+                _ => None,
             }
-            Some('.') => {
-                let class = &element[1..];
-                attributes.push(AttributeType::Class(class.into()));
-            }
-            Some('#') => {
-                let id = &element[1..];
-                attributes.push(AttributeType::Id(id.into()));
-            }
-            Some('>') => {
-                let text = &element[2..];
-                attributes.push(AttributeType::Text(text.into()));
-            }
-            _ => {}
-        }
-    }
-
-    attributes
+        })
+        .collect()
 }
 
 #[cfg(test)]

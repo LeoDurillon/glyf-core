@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::{
-    config::Config,
+    config::{Config, ParserMode},
     parser::{Element, GlyfError, Node, NodeType},
 };
 
@@ -24,7 +24,7 @@ const VOID_ELEMENTS: &[&str] = &[
 pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<Element, GlyfError> {
     let cleaned = html.replace("\n", "").replace("\t", "").trim().to_string();
     if cleaned.is_empty() {
-        return Err(GlyfError::NoIdentifier);
+        return Err(GlyfError::EmptyInput);
     }
     let tags = extract_tags_from_html(&cleaned);
 
@@ -44,9 +44,8 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
 
     // Self-closing: return immediately with optional sibling
     if closing_tag_index.is_none() {
-        return Element::new(
-            Some(format!("{}/", identifier)),
-            None,
+        return Element::from_abbr(
+            &format!("{}/", identifier),
             1,
             sibling.map(|s| {
                 Box::new(Node {
@@ -75,9 +74,8 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
     // sibling attaches at the right level: (element>children)+sibling
     let mut group = None;
     if sibling.is_some() && children.is_some() {
-        group = Some(Box::new(Element::new(
-            Some(identifier.clone()),
-            None,
+        group = Some(Box::new(Element::from_abbr(
+            &identifier,
             1,
             Some(Box::new(Node {
                 node: children.clone().unwrap(),
@@ -88,13 +86,27 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
         )?));
     }
 
-    Element::new(
-        if group.is_some() {
-            None
+    if let Some(group) = group {
+        return Ok(Element::from_group(
+            group,
+            1,
+            sibling.map(|s| {
+                Box::new(Node {
+                    node: s,
+                    node_type: NodeType::Sibling,
+                })
+            }),
+            level,
+            config.mode,
+        ));
+    }
+
+    Element::from_abbr(
+        if identifier.is_empty() && config.mode == ParserMode::JSX {
+            "e"
         } else {
-            Some(identifier)
+            &identifier
         },
-        group,
         1,
         sibling.map_or(
             children.map(|c| {
@@ -128,7 +140,7 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
 pub fn html_to_glyf(html: &str) -> Result<String, GlyfError> {
     let cleaned = html.replace("\n", "").replace("\t", "").trim().to_string();
     if cleaned.is_empty() {
-        return Err(GlyfError::NoIdentifier);
+        return Err(GlyfError::EmptyInput);
     }
     let tags = extract_tags_from_html(&cleaned);
     let (mut identifier, closing_tag_index) = get_identifier_from_html(&tags)?;
@@ -136,6 +148,9 @@ pub fn html_to_glyf(html: &str) -> Result<String, GlyfError> {
     let is_self_closing = closing_tag_index.is_none();
     if is_self_closing {
         identifier.push('/')
+    }
+    if identifier.is_empty() {
+        identifier.push('e');
     }
 
     let close = closing_tag_index.map_or(1, |c| c + 1);
@@ -271,6 +286,7 @@ mod tests {
     // -------------------------------------------------------------------------
     #[cfg(test)]
     mod parse_html_tests {
+
         use crate::config::Config;
 
         use super::super::parse_html;

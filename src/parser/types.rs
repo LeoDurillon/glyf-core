@@ -86,82 +86,55 @@ impl Default for Element {
 }
 
 impl Element {
-    /// Constructs an [`Element`] from raw parsed data.
+    /// Wraps an already-parsed [`Element`] tree in a group node.
     ///
-    /// - If `value` is `Some`, snippet expansion and attribute parsing are applied.
-    /// - If the expanded snippet contains `>` or `+` (child/sibling operators), it is
-    ///   re-parsed and wrapped as a group (`identifier = None`,`group = Some(inner)`),
-    ///   exactly like an explicit `(...)` group expression.
-    /// - If `value` is `None`, the element is a group wrapper (`identifier = None`).
-    /// - In JSX mode ([`crate::config::ParserMode::JSX`]), the literal identifier `"e"`
-    ///   is recognised directly and produces a JSX fragment
-    ///   (`identifier = Some("")`, renders as `<></>`) — no snippet entry needed.
+    /// Used by `parse_group` and internally when snippet expansion
+    /// produces a compound expression containing `>` or `+`.
+    pub(super) fn from_group(
+        group: Box<Element>,
+        multiplier: usize,
+        node: Option<Box<Node>>,
+        level: Option<usize>,
+        mode: ParserMode,
+    ) -> Self {
+        Self {
+            identifier: None,
+            self_closing: false,
+            attributes: None,
+            group: Some(group),
+            multiplier,
+            node,
+            level,
+            mode,
+        }
+    }
+
+    /// Parses a raw Glyf abbreviation fragment into a concrete [`Element`].
+    ///
+    /// Pipeline:
+    /// 1. Snippet expansion.
+    /// 2. If the result contains `>` or `+`, re-parses via `parse_input`
+    ///    and delegates to [`Element::from_group`].
+    /// 3. Otherwise extracts the identifier, self-closing flag, and attributes.
     ///
     /// # Errors
-    /// Returns [`GlyfError::NoIdentifier`] when `value` is non-empty but contains
-    /// no leading word characters (e.g. a lone operator with no tag name).
-    pub fn new(
-        value: Option<String>,
-        group: Option<Box<Element>>,
+    /// Returns [`GlyfError::NoIdentifier`] when no valid tag name is found.
+    pub(super) fn from_abbr(
+        value: &str,
         multiplier: usize,
         node: Option<Box<Node>>,
         level: Option<usize>,
         config: &Config,
     ) -> Result<Self, GlyfError> {
         let mode = config.mode;
-        if let Some(value) = value {
-            if mode == ParserMode::JSX && value == "e" {
-                return Ok(Self {
-                    identifier: Some(String::new()),
-                    self_closing: false,
-                    attributes: None,
-                    group,
-                    multiplier,
-                    node,
-                    level,
-                    mode,
-                });
-            }
 
-            let transformed_value = parse_snippet(&value, &config.snippets);
-            if has_node_operator(&transformed_value) {
-                let group = parse_input(&transformed_value, level, config);
-                return match group {
-                    Err(e) => Err(e),
-                    Ok(element) => Ok(Self {
-                        identifier: None,
-                        group: Some(Box::new(element)),
-                        multiplier,
-                        level,
-                        node,
-                        ..Default::default()
-                    }),
-                };
-            }
-
-            let identifier_match = IDENTIFIER_REGEX.find(&transformed_value);
-            if identifier_match.is_none() {
-                return Err(GlyfError::NoIdentifier);
-            }
-
-            let identifier = identifier_match.unwrap().as_str().to_string();
-
-            let self_closing = transformed_value.ends_with("/");
-            let attribute_end = if self_closing {
-                transformed_value.len().saturating_sub(1)
-            } else {
-                transformed_value.len()
-            };
-            let attributes = parse_attribute(&transformed_value[identifier.len()..attribute_end]);
+        // JSX fragment shorthand: bare "e" → <></>
+        if mode == ParserMode::JSX && value == "e" {
             return Ok(Self {
-                identifier: Some(identifier),
-                self_closing,
-                attributes: if !attributes.is_empty() {
-                    Some(attributes)
-                } else {
-                    None
-                },
-                group,
+                identifier: Some(String::new()),
+                self_closing: false,
+                attributes: None,
+                group: None,
                 multiplier,
                 node,
                 level,
@@ -169,12 +142,44 @@ impl Element {
             });
         }
 
-        // If no value then we return default
+        let expanded = parse_snippet(value, &config.snippets);
+
+        // Snippet expanded to a compound expression — re-parse as a tree
+        if has_node_operator(&expanded) {
+            let inner = parse_input(&expanded, level, config)?;
+            return Ok(Self::from_group(
+                Box::new(inner),
+                multiplier,
+                node,
+                level,
+                mode,
+            ));
+        }
+
+        // Concrete element: extract identifier and attributes
+        let identifier = IDENTIFIER_REGEX
+            .find(&expanded)
+            .ok_or(GlyfError::NoIdentifier)? // ← replaces is_none() + unwrap()
+            .as_str()
+            .to_string();
+
+        let self_closing = expanded.ends_with('/');
+        let attr_end = if self_closing {
+            expanded.len().saturating_sub(1)
+        } else {
+            expanded.len()
+        };
+        let attributes = parse_attribute(&expanded[identifier.len()..attr_end]);
+
         Ok(Self {
-            identifier: None,
-            self_closing: false,
-            attributes: None,
-            group,
+            identifier: Some(identifier),
+            self_closing,
+            attributes: if attributes.is_empty() {
+                None
+            } else {
+                Some(attributes)
+            },
+            group: None,
             multiplier,
             node,
             level,
@@ -202,17 +207,12 @@ impl Element {
         if let Some(identifier) = &self.identifier {
             result.push_str(identifier);
             if let Some(attributes) = &self.attributes {
-                let mut glyf_attribute = attributes
+                let mut sorted = attributes.iter().collect::<Vec<&AttributeType>>();
+                sorted.sort();
+                let glyf_attribute = sorted
                     .iter()
                     .map(|attr| attr.to_glyf())
                     .collect::<Vec<String>>();
-                glyf_attribute.sort_by_key(|k| match k.chars().next() {
-                    Some('.') => 0, // class
-                    Some('#') => 1, // id
-                    Some(':') => 2, // props
-                    Some('>') => 3, // text content
-                    _ => 4,
-                });
                 result.push_str(&glyf_attribute.join(""));
             }
             if self.self_closing {
@@ -273,9 +273,9 @@ impl Display for Element {
 
             let classes = &attributes
                 .iter()
-                .map(|a| match a {
-                    AttributeType::Class(name) => name.as_str(),
-                    _ => "",
+                .filter_map(|a| match a {
+                    AttributeType::Class(name) => Some(name.as_str()),
+                    _ => None,
                 })
                 .filter(|v| !v.is_empty())
                 .collect::<Vec<&str>>()
@@ -283,19 +283,26 @@ impl Display for Element {
 
             let props_attributes = &attributes
                 .iter()
-                .filter(|a| matches!(a, AttributeType::Id(_) | AttributeType::Props(_, _)))
-                .map(|a| a.render(self.mode))
+                .filter_map(|a| {
+                    if matches!(a, AttributeType::Id(_) | AttributeType::Props(_, _)) {
+                        Some(a.render(self.mode))
+                    } else {
+                        None
+                    }
+                })
                 .collect::<Vec<String>>()
                 .join("");
 
-            let text_attribute = if let Some(attribute) = &attributes
+            let text_attribute = &attributes
                 .iter()
-                .find(|a| matches!(a, AttributeType::Text(_)))
-            {
-                attribute.render(self.mode)
-            } else {
-                String::new()
-            };
+                .find_map(|a| {
+                    if matches!(a, AttributeType::Text(_)) {
+                        Some(a.render(self.mode))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(String::new());
 
             let class_attribute = if !classes.is_empty() {
                 match self.mode {
@@ -360,8 +367,7 @@ mod tests {
 
         #[test]
         fn simple_identifier() {
-            let e =
-                Element::new(Some("div".into()), None, 1, None, None, &Config::default()).unwrap();
+            let e = Element::from_abbr("div", 1, None, None, &Config::default()).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("div"));
             assert!(!e.self_closing);
             assert!(e.attributes.is_none());
@@ -370,22 +376,14 @@ mod tests {
         #[test]
         fn snippet_expands_self_closing_tag() {
             let config = html_config(&[("br", "br/")]);
-            let e = Element::new(Some("br".into()), None, 1, None, None, &config).unwrap();
+            let e = Element::from_abbr("br", 1, None, None, &config).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("br"));
             assert!(e.self_closing);
         }
 
         #[test]
         fn explicit_self_closing_slash() {
-            let e = Element::new(
-                Some("Input/".into()),
-                None,
-                1,
-                None,
-                None,
-                &Config::default(),
-            )
-            .unwrap();
+            let e = Element::from_abbr("Input/", 1, None, None, &Config::default()).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("Input"));
             assert!(e.self_closing);
         }
@@ -393,7 +391,7 @@ mod tests {
         #[test]
         fn snippet_expands_and_parses_attributes() {
             let config = html_config(&[("img", "img:src:alt")]);
-            let e = Element::new(Some("img".into()), None, 1, None, None, &config).unwrap();
+            let e = Element::from_abbr("img", 1, None, None, &config).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("img"));
             let attrs = e.attributes.expect("img should have attributes");
             assert_eq!(attrs.len(), 2);
@@ -403,15 +401,7 @@ mod tests {
 
         #[test]
         fn class_attribute_is_parsed() {
-            let e = Element::new(
-                Some("div.container".into()),
-                None,
-                1,
-                None,
-                None,
-                &Config::default(),
-            )
-            .unwrap();
+            let e = Element::from_abbr("div.container", 1, None, None, &Config::default()).unwrap();
             assert_eq!(e.identifier.as_deref(), Some("div"));
             let attrs = e.attributes.expect("should have attributes");
             assert_eq!(attrs.len(), 1);
@@ -420,15 +410,7 @@ mod tests {
 
         #[test]
         fn prop_with_value_is_parsed() {
-            let e = Element::new(
-                Some("div:role=main".into()),
-                None,
-                1,
-                None,
-                None,
-                &Config::default(),
-            )
-            .unwrap();
+            let e = Element::from_abbr("div:role=main", 1, None, None, &Config::default()).unwrap();
             let attrs = e.attributes.expect("should have attributes");
             assert_eq!(
                 attrs[0],
@@ -437,24 +419,8 @@ mod tests {
         }
 
         #[test]
-        fn none_value_produces_group_element() {
-            let e = Element::new(None, None, 1, None, None, &Config::default()).unwrap();
-            assert!(e.identifier.is_none());
-            assert!(!e.self_closing);
-            assert!(e.attributes.is_none());
-        }
-
-        #[test]
         fn multiplier_and_level_are_passed_through() {
-            let e = Element::new(
-                Some("li".into()),
-                None,
-                5,
-                None,
-                Some(2),
-                &Config::default(),
-            )
-            .unwrap();
+            let e = Element::from_abbr("li", 5, None, Some(2), &Config::default()).unwrap();
             assert_eq!(e.multiplier, 5);
             assert_eq!(e.level, Some(2));
         }
@@ -469,7 +435,7 @@ mod tests {
         #[test]
         fn child_operator_in_expansion_produces_group() {
             let config = html_config(&[("card", "div.card>p")]);
-            let e = Element::new(Some("card".into()), None, 1, None, None, &config).unwrap();
+            let e = Element::from_abbr("card", 1, None, None, &config).unwrap();
             assert!(
                 e.identifier.is_none(),
                 "group wrapper must have identifier = None"
@@ -481,7 +447,7 @@ mod tests {
         #[test]
         fn sibling_operator_in_expansion_produces_group() {
             let config = html_config(&[("duo", "h1+p")]);
-            let e = Element::new(Some("duo".into()), None, 1, None, None, &config).unwrap();
+            let e = Element::from_abbr("duo", 1, None, None, &config).unwrap();
             assert!(e.identifier.is_none());
             let inner = e.group.expect("should have a group");
             assert_eq!(inner.identifier.as_deref(), Some("h1"));
@@ -493,7 +459,7 @@ mod tests {
         #[test]
         fn complex_expansion_builds_nested_tree() {
             let config = html_config(&[("card", "div.card>p.card-header+p.card-body")]);
-            let e = Element::new(Some("card".into()), None, 1, None, None, &config).unwrap();
+            let e = Element::from_abbr("card", 1, None, None, &config).unwrap();
             assert!(e.identifier.is_none());
             let inner = e.group.expect("should have group");
             assert_eq!(inner.identifier.as_deref(), Some("div"));
@@ -514,19 +480,19 @@ mod tests {
         #[test]
         fn multiplier_is_preserved_on_group_expansion() {
             let config = html_config(&[("card", "div.card>p")]);
-            let e = Element::new(Some("card".into()), None, 3, None, None, &config).unwrap();
+            let e = Element::from_abbr("card", 3, None, None, &config).unwrap();
             assert_eq!(e.multiplier, 3);
         }
 
         #[test]
         fn outer_sibling_node_is_preserved_on_group_expansion() {
             let config = html_config(&[("card", "div.card>p")]);
-            let footer = Element::new(Some("footer".into()), None, 1, None, None, &config).unwrap();
+            let footer = Element::from_abbr("footer", 1, None, None, &config).unwrap();
             let node = Box::new(Node {
                 node_type: NodeType::Sibling,
                 node: footer,
             });
-            let e = Element::new(Some("card".into()), None, 1, Some(node), None, &config).unwrap();
+            let e = Element::from_abbr("card", 1, Some(node), None, &config).unwrap();
             let sibling = e.node.expect("wrapper must carry the sibling node");
             assert!(matches!(sibling.node_type, NodeType::Sibling));
             assert_eq!(sibling.node.identifier.as_deref(), Some("footer"));
@@ -535,21 +501,21 @@ mod tests {
         #[test]
         fn child_expansion_renders_correctly() {
             let config = html_config(&[("card", "div.card>p")]);
-            let e = Element::new(Some("card".into()), None, 1, None, None, &config).unwrap();
+            let e = Element::from_abbr("card", 1, None, None, &config).unwrap();
             assert_eq!(e.to_string(), "<div class=\"card\">\n\t<p></p>\n</div>");
         }
 
         #[test]
         fn sibling_expansion_renders_correctly() {
             let config = html_config(&[("duo", "h1+p")]);
-            let e = Element::new(Some("duo".into()), None, 1, None, None, &config).unwrap();
+            let e = Element::from_abbr("duo", 1, None, None, &config).unwrap();
             assert_eq!(e.to_string(), "<h1></h1>\n<p></p>");
         }
 
         #[test]
         fn complex_card_expansion_renders_correctly() {
             let config = html_config(&[("card", "div.card>p.card-header+p.card-body")]);
-            let e = Element::new(Some("card".into()), None, 1, None, None, &config).unwrap();
+            let e = Element::from_abbr("card", 1, None, None, &config).unwrap();
             assert_eq!(
                 e.to_string(),
                 "<div class=\"card\">\n\t<p class=\"card-header\"></p>\n\t<p class=\"card-body\"></p>\n</div>"
@@ -559,7 +525,7 @@ mod tests {
         #[test]
         fn multiplied_group_expansion_renders_correctly() {
             let config = html_config(&[("duo", "h1+p")]);
-            let e = Element::new(Some("duo".into()), None, 3, None, None, &config).unwrap();
+            let e = Element::from_abbr("duo", 3, None, None, &config).unwrap();
             assert_eq!(
                 e.to_string(),
                 "<h1></h1>\n<p></p>\n<h1></h1>\n<p></p>\n<h1></h1>\n<p></p>"
@@ -569,12 +535,12 @@ mod tests {
         #[test]
         fn group_expansion_with_outer_sibling_renders_correctly() {
             let config = html_config(&[("card", "div.card>p")]);
-            let footer = Element::new(Some("footer".into()), None, 1, None, None, &config).unwrap();
+            let footer = Element::from_abbr("footer", 1, None, None, &config).unwrap();
             let node = Box::new(Node {
                 node_type: NodeType::Sibling,
                 node: footer,
             });
-            let e = Element::new(Some("card".into()), None, 1, Some(node), None, &config).unwrap();
+            let e = Element::from_abbr("card", 1, Some(node), None, &config).unwrap();
             assert_eq!(
                 e.to_string(),
                 "<div class=\"card\">\n\t<p></p>\n</div>\n<footer></footer>"
@@ -594,43 +560,43 @@ mod tests {
 
         #[test]
         fn simple_element() {
-            let e = Element::new(Some("div".into()), None, 1, None, None, &cfg()).unwrap();
+            let e = Element::from_abbr("div", 1, None, None, &cfg()).unwrap();
             assert_eq!(e.to_glyf(), "div");
         }
 
         #[test]
         fn element_with_class() {
-            let e = Element::new(Some("div.foo".into()), None, 1, None, None, &cfg()).unwrap();
+            let e = Element::from_abbr("div.foo", 1, None, None, &cfg()).unwrap();
             assert_eq!(e.to_glyf(), "div.foo");
         }
 
         #[test]
         fn element_with_id() {
-            let e = Element::new(Some("div#main".into()), None, 1, None, None, &cfg()).unwrap();
+            let e = Element::from_abbr("div#main", 1, None, None, &cfg()).unwrap();
             assert_eq!(e.to_glyf(), "div#main");
         }
 
         #[test]
         fn element_with_prop() {
-            let e = Element::new(Some("a:href=url".into()), None, 1, None, None, &cfg()).unwrap();
+            let e = Element::from_abbr("a:href=url", 1, None, None, &cfg()).unwrap();
             assert_eq!(e.to_glyf(), "a:href=url");
         }
 
         #[test]
         fn element_with_text_content() {
-            let e = Element::new(Some("p>>Hello".into()), None, 1, None, None, &cfg()).unwrap();
+            let e = Element::from_abbr("p>>Hello", 1, None, None, &cfg()).unwrap();
             assert_eq!(e.to_glyf(), "p>>Hello");
         }
 
         #[test]
         fn self_closing_element() {
-            let e = Element::new(Some("br/".into()), None, 1, None, None, &cfg()).unwrap();
+            let e = Element::from_abbr("br/", 1, None, None, &cfg()).unwrap();
             assert_eq!(e.to_glyf(), "br/");
         }
 
         #[test]
         fn element_with_multiplier() {
-            let e = Element::new(Some("li".into()), None, 3, None, None, &cfg()).unwrap();
+            let e = Element::from_abbr("li", 3, None, None, &cfg()).unwrap();
             assert_eq!(e.to_glyf(), "li*3");
         }
 
@@ -649,7 +615,7 @@ mod tests {
         #[test]
         fn attributes_sorted_class_before_id() {
             // to_glyf uses compress order: class first, then id
-            let e = Element::new(Some("div#main.foo".into()), None, 1, None, None, &cfg()).unwrap();
+            let e = Element::from_abbr("div#main.foo", 1, None, None, &cfg()).unwrap();
             assert_eq!(e.to_glyf(), "div.foo#main");
         }
 

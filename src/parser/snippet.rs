@@ -27,7 +27,7 @@ const SNIPPET_BOUNDARIES: &[char] = &[':', '.', '#', '>', '+', '*', '/'];
 /// // "a:id=main" → "a:href:id=main" (extra attrs appended after expansion)
 /// ```
 pub(super) fn parse_snippet(value: &str, snippets: &HashMap<String, String>) -> String {
-    let longuest_match = snippets
+    let longest_match = snippets
         .iter()
         .filter(|(key, _)| {
             value.starts_with(key.as_str()) && {
@@ -37,7 +37,7 @@ pub(super) fn parse_snippet(value: &str, snippets: &HashMap<String, String>) -> 
         })
         .max_by_key(|(key, _)| key.len());
 
-    match longuest_match {
+    match longest_match {
         Some((key, expanded)) => format!("{}{}", expanded, &value[key.len()..]),
         None => value.to_string(),
     }
