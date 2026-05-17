@@ -34,14 +34,6 @@ pub enum Node {
 }
 
 impl Node {
-    /// helper function to calculate the next node level based on their node type
-    pub(super) fn next_level(&self, level: Option<usize>) -> Option<usize> {
-        match self {
-            Node::Sibling(_) => level,
-            Node::Children(_) => level.map_or(Some(1), |l| Some(l + 1)),
-        }
-    }
-
     pub fn element(&self) -> &Element {
         match self {
             Node::Sibling(el) | Node::Children(el) => el,
