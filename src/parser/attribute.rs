@@ -10,7 +10,7 @@
 //! | `:key=value` | Props | `a:href=url` | `href="url"` |
 //! | `>>text` | Text content | `p>>Hello` | inner content `Hello` |
 
-use std::sync::LazyLock;
+use std::{collections::HashMap, sync::LazyLock};
 
 use regex::Regex;
 
@@ -114,26 +114,54 @@ impl AttributeType {
 /// - `{expr}` — kept as-is in JSX mode; wrapped in `"quotes"` in HTML mode
 /// - `plain`  — always wrapped in `"quotes"`
 pub fn parse_attribute(attributes: &str) -> Vec<AttributeType> {
-    ATTRIBUTE_REGEX
-        .find_iter(attributes)
-        .filter_map(|cap| {
-            let s = cap.as_str();
-            match s.chars().next()? {
-                ':' => {
-                    let mut parts = s[1..].splitn(2, '=');
-                    let key = parts.next()?;
-                    Some(AttributeType::Props(
-                        key.into(),
-                        parts.next().map(str::to_owned),
-                    ))
+    let mut prop_pos: HashMap<String, usize> = HashMap::new();
+    let mut id_pos: Option<usize> = None;
+    let mut result: Vec<AttributeType> = Vec::new();
+
+    ATTRIBUTE_REGEX.find_iter(attributes).for_each(|cap| {
+        let s = cap.as_str();
+        let attribute = match s.chars().next() {
+            Some(':') => {
+                let mut parts = s[1..].splitn(2, '=');
+                let key = parts.next();
+                if key.is_none_or(|k| k.is_empty()) {
+                    return;
                 }
-                '.' => Some(AttributeType::Class(s[1..].into())),
-                '#' => Some(AttributeType::Id(s[1..].into())),
-                '>' => Some(AttributeType::Text(s[2..].into())),
-                _ => None,
+                Some(AttributeType::Props(
+                    key.unwrap().into(),
+                    parts.next().map(str::to_owned),
+                ))
             }
-        })
-        .collect()
+            Some('.') => Some(AttributeType::Class(s[1..].into())),
+            Some('#') => Some(AttributeType::Id(s[1..].into())),
+            Some('>') => Some(AttributeType::Text(s[2..].into())),
+            _ => None,
+        };
+
+        // clean duplicate logic
+        match attribute {
+            Some(AttributeType::Props(name, value)) => {
+                if let Some(&pos) = prop_pos.get(&name) {
+                    result[pos] = AttributeType::Props(name, value);
+                } else {
+                    prop_pos.insert(name.clone(), result.len());
+                    result.push(AttributeType::Props(name, value));
+                }
+            }
+            Some(AttributeType::Id(value)) => {
+                if let Some(pos) = id_pos {
+                    result[pos] = AttributeType::Id(value);
+                } else {
+                    id_pos = Some(result.len());
+                    result.push(AttributeType::Id(value));
+                }
+            }
+            Some(attr) => result.push(attr),
+            _ => {}
+        }
+    });
+
+    result
 }
 
 #[cfg(test)]
@@ -241,6 +269,44 @@ mod tests {
                 attrs[2],
                 AttributeType::Props("aria-label".into(), Some("nav".into()))
             );
+        }
+
+        #[test]
+        fn duplicate_prop_last_value_wins() {
+            // snippet produces ":href", user suffix appends ":href=abc"
+            // position of :href is preserved, value updated
+            let attrs = parse_attribute(":href:href=abc");
+            assert_eq!(attrs.len(), 1);
+            assert_eq!(
+                attrs[0],
+                AttributeType::Props("href".into(), Some("abc".into()))
+            );
+        }
+
+        #[test]
+        fn duplicate_prop_with_all_snippet_attrs() {
+            // simulates img:src:alt:src=foo coming out of parse_snippet
+            let attrs = parse_attribute(":src:alt:src=foo");
+            assert_eq!(attrs.len(), 2);
+            assert_eq!(
+                attrs[0],
+                AttributeType::Props("src".into(), Some("foo".into()))
+            );
+            assert_eq!(attrs[1], AttributeType::Props("alt".into(), None));
+        }
+
+        #[test]
+        fn non_prop_attrs_are_never_deduplicated() {
+            // two identical classes are both kept (valid HTML: just redundant)
+            let attrs = parse_attribute(".foo.foo");
+            assert_eq!(attrs.len(), 2);
+        }
+
+        #[test]
+        fn duplicate_id_last_value_wins() {
+            let attrs = parse_attribute("#first#second");
+            assert_eq!(attrs.len(), 1);
+            assert_eq!(attrs[0], AttributeType::Id("second".into()));
         }
     }
 

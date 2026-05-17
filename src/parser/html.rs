@@ -22,7 +22,7 @@ const VOID_ELEMENTS: &[&str] = &[
 ];
 
 pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<Element, GlyfError> {
-    let cleaned = html.replace("\n", "").replace("\t", "").trim().to_string();
+    let cleaned = html.replace("\n", "").replace("  ", "").trim().to_string();
     if cleaned.is_empty() {
         return Err(GlyfError::EmptyInput);
     }
@@ -116,7 +116,7 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
 /// Returns [`GlyfError::NoIdentifier`] if `html` is empty or contains no
 /// valid HTML element.
 pub fn html_to_glyf(html: &str) -> Result<String, GlyfError> {
-    let cleaned = html.replace("\n", "").replace("\t", "").trim().to_string();
+    let cleaned = html.replace("\n", "").replace("  ", "").trim().to_string();
     if cleaned.is_empty() {
         return Err(GlyfError::EmptyInput);
     }
