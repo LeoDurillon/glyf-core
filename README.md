@@ -25,7 +25,7 @@ ul>li.item*3
 
 ```toml
 [dependencies]
-glyf-core = "0.2.2"
+glyf-core = "0.3"
 ```
 
 ---
@@ -79,15 +79,15 @@ By default the library renders standard HTML. Pass a `Config` with
 - The `e` abbreviation expands to a JSX fragment `<></>`
 
 ```rust
-use std::collections::HashMap;
 use glyf_core::expand;
 use glyf_core::config::{Config, ParserMode};
+use std::collections::HashMap;
 
-let config = Config { mode: ParserMode::JSX, snippets: HashMap::new() };
+let config = Config::new(ParserMode::JSX, HashMap::new());
 expand("div.container", None, Some(config));
 // <div className="container"></div>
 
-let jsx_config = Config { mode: ParserMode::JSX, snippets: HashMap::new() };
+let jsx_config = Config::new(ParserMode::JSX, HashMap::new());
 expand("e>p", None, Some(jsx_config));
 // <><p></p></>
 ```
@@ -99,17 +99,17 @@ parsing. Custom snippets support the full glyf syntax, including multi-element
 expansions containing `>` or `+`.
 
 ```rust
-use std::collections::HashMap;
 use glyf_core::expand;
 use glyf_core::config::{Config, ParserMode};
+use std::collections::HashMap;
 
-let config = Config {
-    mode: ParserMode::HTML,
-    snippets: HashMap::from([
+let config = Config::new(
+    ParserMode::HTML,
+    HashMap::from([
         ("mc".to_string(),   "MyComponent".to_string()),
         ("card".to_string(), "div.card>p.card-header+p.card-body".to_string()),
     ]),
-};
+);
 
 expand("mc", None, Some(config.clone()));
 // <MyComponent></MyComponent>
@@ -122,22 +122,44 @@ expand("card", None, Some(config));
 ```
 
 
-### Working with the AST
+### Compressing HTML to an abbreviation
 
-If you need the parsed tree rather than a rendered string, use
-`parser::parse_input` directly. It returns an `Element` which implements
-`Display` for rendering.
+`compress` is the inverse of `expand` — it converts HTML markup back to the
+shortest Glyf abbreviation that would regenerate equivalent output.
 
 ```rust
-use glyf_core::parser::parse_input;
-use glyf_core::config::Config;
+use glyf_core::compress;
 
-let element = parse_input("ul>li*3", None, &Config::default()).unwrap();
+assert_eq!(compress("<div class=\"card\"><p></p></div>").unwrap(), "div.card>p");
+assert_eq!(compress("<div></div><span></span>").unwrap(), "div+span");
+assert_eq!(compress("<div><p></p></div><span></span>").unwrap(), "(div>p)+span");
+```
+
+### Working with the AST
+
+Use `expand_to_tree` or `compress_to_tree` when you need the parsed
+[`Element`](https://docs.rs/glyf-core/latest/glyf_core/parser/struct.Element.html)
+tree rather than a string. `Element` implements `Display` for rendering back
+to HTML and `to_glyf()` for serialising back to an abbreviation.
+
+```rust
+use glyf_core::expand_to_tree;
+
+let element = expand_to_tree("ul>li*3", None, None).unwrap();
 
 println!("tag:        {:?}", element.identifier);
 println!("multiplier: {}", element.multiplier);
 println!("has child:  {}", element.node.is_some());
 println!("rendered:\n{}", element);
+```
+
+```rust
+use glyf_core::compress_to_tree;
+use glyf_core::parser::Node;
+
+let el = compress_to_tree("<ul><li></li></ul>", None).unwrap();
+assert_eq!(el.identifier.as_deref(), Some("ul"));
+assert!(matches!(*el.node.unwrap(), Node::Children(_)));
 ```
 
 ### Error handling
@@ -153,6 +175,8 @@ match expand(abbr, None, None) {
     Ok(html)                           => insert(html),
     Err(GlyfError::UnmatchedBrackets)  => { /* user is still typing */ }
     Err(GlyfError::NoIdentifier)       => { /* empty or operator-only input */ }
+    Err(GlyfError::EmptyInput)         => { /* blank string */ }
+    Err(GlyfError::MalformedHtml(msg)) => { /* invalid HTML passed to compress */ }
 }
 ```
 
@@ -160,6 +184,8 @@ match expand(abbr, None, None) {
 |---|---|
 | `GlyfError::UnmatchedBrackets` | Input contains unclosed `(` or `)` |
 | `GlyfError::NoIdentifier` | Input has no valid tag name (e.g. bare `">"`) |
+| `GlyfError::EmptyInput` | Input is an empty string |
+| `GlyfError::MalformedHtml` | HTML passed to `compress` / `compress_to_tree` is not parseable |
 
 ---
 
