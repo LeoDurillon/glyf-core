@@ -1,3 +1,9 @@
+//! Bracket balance validation for Glyf abbreviations.
+//!
+//! Checks that every `(`, `{`, and `[` in the input is matched by a
+//! corresponding closer before the parser runs. A failed check short-circuits
+//! the parse with [`crate::parser::GlyfError::UnmatchedBrackets`].
+
 fn is_matching_opener(opener: &char, closer: &char) -> bool {
     match closer {
         ')' => &'(' == opener,

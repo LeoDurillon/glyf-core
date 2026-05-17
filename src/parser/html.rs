@@ -4,7 +4,7 @@ use regex::Regex;
 
 use crate::{
     config::{Config, ParserMode},
-    parser::{Element, GlyfError, Node, NodeType},
+    parser::{Element, GlyfError, Node},
 };
 
 fn extract_tags_from_html(html: &str) -> Vec<&str> {
@@ -47,12 +47,7 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
         return Element::from_abbr(
             &format!("{}/", identifier),
             1,
-            sibling.map(|s| {
-                Box::new(Node {
-                    node: s,
-                    node_type: NodeType::Sibling,
-                })
-            }),
+            sibling.map(|s| Box::new(Node::Sibling(s))),
             None,
             config,
         );
@@ -73,14 +68,13 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
     // When both children and a sibling exist, wrap in a group so the
     // sibling attaches at the right level: (element>children)+sibling
     let mut group = None;
-    if sibling.is_some() && children.is_some() {
+    if sibling.is_some()
+        && let Some(child) = children.as_ref()
+    {
         group = Some(Box::new(Element::from_abbr(
             &identifier,
             1,
-            Some(Box::new(Node {
-                node: children.clone().unwrap(),
-                node_type: NodeType::Children,
-            })),
+            Some(Box::new(Node::Children(child.to_owned()))),
             level,
             config,
         )?));
@@ -90,12 +84,7 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
         return Ok(Element::from_group(
             group,
             1,
-            sibling.map(|s| {
-                Box::new(Node {
-                    node: s,
-                    node_type: NodeType::Sibling,
-                })
-            }),
+            sibling.map(|s| Box::new(Node::Sibling(s))),
             level,
             config.mode,
         ));
@@ -108,20 +97,9 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
             &identifier
         },
         1,
-        sibling.map_or(
-            children.map(|c| {
-                Box::new(Node {
-                    node: c,
-                    node_type: NodeType::Children,
-                })
-            }),
-            |s| {
-                Some(Box::new(Node {
-                    node: s,
-                    node_type: NodeType::Sibling,
-                }))
-            },
-        ),
+        sibling.map_or(children.map(|c| Box::new(Node::Children(c))), |s| {
+            Some(Box::new(Node::Sibling(s)))
+        }),
         level,
         config,
     )

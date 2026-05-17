@@ -1,8 +1,9 @@
 //! AST types produced by the Glyf parser.
 //!
 //! The core type is [`Element`], which represents a single node in the
-//! parsed abbreviation tree. Elements are linked together via [`Node`]
-//! which carries a [`NodeType`] to describe the relationship.
+//! parsed abbreviation tree. Elements are linked together via [`Node`],
+//! an enum whose variant (`Sibling` or `Children`) carries the linked
+//! element and describes the relationship.
 
 use std::{fmt::Display, iter::repeat_n, sync::LazyLock};
 
@@ -14,28 +15,38 @@ use crate::{
 };
 
 use super::{
-    attribute::{AttributeType, Render, parse_attribute},
+    attribute::{AttributeType, parse_attribute},
     error::GlyfError,
     snippet::parse_snippet,
 };
 
 static IDENTIFIER_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\w-]+").unwrap());
 
-/// The relationship between an element and its next node.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeType {
-    /// `+` — the next node is a sibling (same level)
-    Sibling,
-    /// `>` — the next node is a child (indented one level deeper)
-    Children,
+/// The relationship between an element and the next node in the chain.
+///
+/// Each variant carries the linked [`Element`] directly.
+#[derive(Debug, Clone)]
+pub enum Node {
+    /// `+` — the linked element is a sibling (same indentation level).
+    Sibling(Element),
+    /// `>` — the linked element is a child (indented one level deeper).
+    Children(Element),
 }
 
-/// Links an [`Element`] to the next element in the abbreviation.
-#[derive(Debug, Clone)]
-pub struct Node {
-    pub node_type: NodeType,
-    /// The next element in the chain.
-    pub node: Element,
+impl Node {
+    /// helper function to calculate the next node level based on their node type
+    pub(super) fn next_level(&self, level: Option<usize>) -> Option<usize> {
+        match self {
+            Node::Sibling(_) => level,
+            Node::Children(_) => level.map_or(Some(1), |l| Some(l + 1)),
+        }
+    }
+
+    pub fn element(&self) -> &Element {
+        match self {
+            Node::Sibling(el) | Node::Children(el) => el,
+        }
+    }
 }
 
 /// A parsed Glyf node — the fundamental unit of the output tree.
@@ -228,9 +239,9 @@ impl Element {
 
         if let Some(node) = &self.node {
             result.push_str(
-                match node.node_type {
-                    NodeType::Sibling => format!("+{}", node.node.to_glyf()),
-                    NodeType::Children => format!(">{}", node.node.to_glyf()),
+                match node.as_ref() {
+                    Node::Sibling(el) => format!("+{}", el.to_glyf()),
+                    Node::Children(el) => format!(">{}", el.to_glyf()),
                 }
                 .as_str(),
             );
@@ -243,8 +254,6 @@ impl Element {
 impl Display for Element {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut value = String::new();
-        let mut child = String::new();
-        let mut sibling = String::new();
         let is_first_level = self.level.is_none_or(|v| v == 0);
         let level = self.level.unwrap_or(0);
 
@@ -254,13 +263,12 @@ impl Display for Element {
             "\t".repeat(level)
         );
 
-        if let Some(node) = self.node.as_ref() {
-            if node.node_type == NodeType::Children {
-                child = node.node.to_string()
-            } else if node.node_type == NodeType::Sibling {
-                sibling = node.node.to_string()
-            }
-        }
+        let (child, sibling) = match self.node.as_ref().map(|n| n.as_ref()) {
+            Some(Node::Children(e)) => (e.to_string(), String::new()),
+            Some(Node::Sibling(e)) => (String::new(), e.to_string()),
+            None => (String::new(), String::new()),
+        };
+
         let suffix = if !child.is_empty() {
             format!("\n{}", "\t".repeat(level))
         } else {
@@ -277,7 +285,6 @@ impl Display for Element {
                     AttributeType::Class(name) => Some(name.as_str()),
                     _ => None,
                 })
-                .filter(|v| !v.is_empty())
                 .collect::<Vec<&str>>()
                 .join(" ");
 
@@ -452,8 +459,8 @@ mod tests {
             let inner = e.group.expect("should have a group");
             assert_eq!(inner.identifier.as_deref(), Some("h1"));
             let sibling = inner.node.expect("h1 should have sibling p");
-            assert!(matches!(sibling.node_type, NodeType::Sibling));
-            assert_eq!(sibling.node.identifier.as_deref(), Some("p"));
+            assert!(matches!(*sibling, Node::Sibling(_)));
+            assert_eq!(sibling.element().identifier.as_deref(), Some("p"));
         }
 
         #[test]
@@ -470,11 +477,15 @@ mod tests {
                     .any(|a| a == &AttributeType::Class("card".into()))
             );
             let child_node = inner.node.expect("div should have a child node");
-            assert!(matches!(child_node.node_type, NodeType::Children));
-            assert_eq!(child_node.node.identifier.as_deref(), Some("p"));
-            let sibling_node = child_node.node.node.expect("should have sibling");
-            assert!(matches!(sibling_node.node_type, NodeType::Sibling));
-            assert_eq!(sibling_node.node.identifier.as_deref(), Some("p"));
+            assert!(matches!(*child_node, Node::Children(_)));
+            assert_eq!(child_node.element().identifier.as_deref(), Some("p"));
+            let sibling_node = child_node
+                .element()
+                .node
+                .as_ref()
+                .expect("should have sibling");
+            assert!(matches!(**sibling_node, Node::Sibling(_)));
+            assert_eq!(sibling_node.element().identifier.as_deref(), Some("p"));
         }
 
         #[test]
@@ -488,14 +499,11 @@ mod tests {
         fn outer_sibling_node_is_preserved_on_group_expansion() {
             let config = html_config(&[("card", "div.card>p")]);
             let footer = Element::from_abbr("footer", 1, None, None, &config).unwrap();
-            let node = Box::new(Node {
-                node_type: NodeType::Sibling,
-                node: footer,
-            });
+            let node = Box::new(Node::Sibling(footer));
             let e = Element::from_abbr("card", 1, Some(node), None, &config).unwrap();
             let sibling = e.node.expect("wrapper must carry the sibling node");
-            assert!(matches!(sibling.node_type, NodeType::Sibling));
-            assert_eq!(sibling.node.identifier.as_deref(), Some("footer"));
+            assert!(matches!(*sibling, Node::Sibling(_)));
+            assert_eq!(sibling.element().identifier.as_deref(), Some("footer"));
         }
 
         #[test]
@@ -536,10 +544,7 @@ mod tests {
         fn group_expansion_with_outer_sibling_renders_correctly() {
             let config = html_config(&[("card", "div.card>p")]);
             let footer = Element::from_abbr("footer", 1, None, None, &config).unwrap();
-            let node = Box::new(Node {
-                node_type: NodeType::Sibling,
-                node: footer,
-            });
+            let node = Box::new(Node::Sibling(footer));
             let e = Element::from_abbr("card", 1, Some(node), None, &config).unwrap();
             assert_eq!(
                 e.to_string(),

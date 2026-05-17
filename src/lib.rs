@@ -177,13 +177,13 @@ pub fn expand(
 ///
 /// ```
 /// use glyf_core::expand_to_tree;
-/// use glyf_core::parser::NodeType;
+/// use glyf_core::parser::Node;
 ///
 /// let el = expand_to_tree("ul>li", None, None).unwrap();
 /// assert_eq!(el.identifier.as_deref(), Some("ul"));
 /// let child = el.node.unwrap();
-/// assert_eq!(child.node_type, NodeType::Children);
-/// assert_eq!(child.node.identifier.as_deref(), Some("li"));
+/// assert!(matches!(*child, Node::Children(_)));
+/// assert_eq!(child.element().identifier.as_deref(), Some("li"));
 /// ```
 ///
 /// Inspecting parsed attributes:
@@ -305,13 +305,13 @@ pub fn compress(html: &str) -> Result<String, GlyfError> {
 ///
 /// ```
 /// use glyf_core::compress_to_tree;
-/// use glyf_core::parser::NodeType;
+/// use glyf_core::parser::Node;
 ///
 /// let el = compress_to_tree("<ul><li></li></ul>", None).unwrap();
 /// assert_eq!(el.identifier.as_deref(), Some("ul"));
 /// let child = el.node.unwrap();
-/// assert_eq!(child.node_type, NodeType::Children);
-/// assert_eq!(child.node.identifier.as_deref(), Some("li"));
+/// assert!(matches!(*child, Node::Children(_)));
+/// assert_eq!(child.element().identifier.as_deref(), Some("li"));
 /// ```
 ///
 /// Inspecting parsed attributes:

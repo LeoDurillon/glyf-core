@@ -42,7 +42,7 @@ mod utils;
 pub(super) mod validate;
 
 pub use error::GlyfError;
-pub use types::{Element, Node, NodeType};
+pub use types::{Element, Node};
 use utils::{find_at_depth_zero, get_multiplier};
 
 use crate::config::Config;
@@ -89,12 +89,7 @@ pub(super) fn parse_group(
     Ok(Element::from_group(
         Box::new(parsed_element),
         multiplier,
-        sibling.map(|sibling| {
-            Box::new(Node {
-                node_type: NodeType::Sibling,
-                node: sibling,
-            })
-        }),
+        sibling.map(|sibling| Box::new(Node::Sibling(sibling))),
         level,
         config.mode,
     ))
@@ -151,25 +146,24 @@ pub(super) fn parse_input(
         return Element::from_abbr(element_value, multiplier, None, level, config);
     }
 
-    let node_type = if first_down.0.len() < first_sibling.0.len() {
-        NodeType::Children
+    let next_element_level = if first_down.0.len() < first_sibling.0.len() {
+        level.map_or(Some(1), |l| Some(l + 1))
     } else {
-        NodeType::Sibling
+        level
     };
 
-    let next_element = parse_input(
-        &formatted[element.len() + 1..],
-        node_type.next_level(level),
-        config,
-    )?;
+    let next_element = parse_input(&formatted[element.len() + 1..], next_element_level, config)?;
+
+    let node_type = if first_down.0.len() < first_sibling.0.len() {
+        Node::Children(next_element)
+    } else {
+        Node::Sibling(next_element)
+    };
 
     Element::from_abbr(
         element_value,
         multiplier,
-        Some(Box::new(Node {
-            node: next_element,
-            node_type,
-        })),
+        Some(Box::new(node_type)),
         level,
         config,
     )
@@ -234,9 +228,9 @@ mod tests {
             let r = ok(parse_input("div>p", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let node = r.node.expect("should have a node");
-            assert!(matches!(node.node_type, NodeType::Children));
-            assert_eq!(node.node.identifier.as_deref(), Some("p"));
-            assert!(node.node.node.is_none());
+            assert!(matches!(*node, Node::Children(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("p"));
+            assert!(node.element().node.is_none());
         }
 
         #[test]
@@ -244,8 +238,8 @@ mod tests {
             let r = ok(parse_input("div+p", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let node = r.node.expect("should have a node");
-            assert!(matches!(node.node_type, NodeType::Sibling));
-            assert_eq!(node.node.identifier.as_deref(), Some("p"));
+            assert!(matches!(*node, Node::Sibling(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("p"));
         }
 
         #[test]
@@ -253,11 +247,15 @@ mod tests {
             // '>' at 3, '+' at 5 -> Children wins at the top level
             let r = ok(parse_input("div>p+span", None, &Config::default()));
             let node = r.node.expect("div should have a child node");
-            assert!(matches!(node.node_type, NodeType::Children));
-            assert_eq!(node.node.identifier.as_deref(), Some("p"));
-            let span = node.node.node.expect("p should have sibling span");
-            assert!(matches!(span.node_type, NodeType::Sibling));
-            assert_eq!(span.node.identifier.as_deref(), Some("span"));
+            assert!(matches!(*node, Node::Children(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("p"));
+            let span = node
+                .element()
+                .node
+                .as_ref()
+                .expect("p should have sibling span");
+            assert!(matches!(**span, Node::Sibling(_)));
+            assert_eq!(span.element().identifier.as_deref(), Some("span"));
         }
 
         #[test]
@@ -265,8 +263,8 @@ mod tests {
             // '+' at 3, '>' at 5 -> Sibling wins at the top level
             let r = ok(parse_input("div+p>span", None, &Config::default()));
             let node = r.node.expect("div should have sibling node");
-            assert!(matches!(node.node_type, NodeType::Sibling));
-            assert_eq!(node.node.identifier.as_deref(), Some("p"));
+            assert!(matches!(*node, Node::Sibling(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("p"));
         }
 
         #[test]
@@ -274,11 +272,11 @@ mod tests {
             let r = ok(parse_input("ul>li>a", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("ul"));
             let li = r.node.expect("ul -> li");
-            assert!(matches!(li.node_type, NodeType::Children));
-            assert_eq!(li.node.identifier.as_deref(), Some("li"));
-            let a = li.node.node.expect("li -> a");
-            assert!(matches!(a.node_type, NodeType::Children));
-            assert_eq!(a.node.identifier.as_deref(), Some("a"));
+            assert!(matches!(*li, Node::Children(_)));
+            assert_eq!(li.element().identifier.as_deref(), Some("li"));
+            let a = li.element().node.as_ref().expect("li -> a");
+            assert!(matches!(**a, Node::Children(_)));
+            assert_eq!(a.element().identifier.as_deref(), Some("a"));
         }
 
         #[test]
@@ -287,8 +285,8 @@ mod tests {
             assert_eq!(r.identifier.as_deref(), Some("li"));
             assert_eq!(r.multiplier, 3);
             let node = r.node.expect("li -> a");
-            assert!(matches!(node.node_type, NodeType::Children));
-            assert_eq!(node.node.identifier.as_deref(), Some("a"));
+            assert!(matches!(*node, Node::Children(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("a"));
         }
 
         #[test]
@@ -309,17 +307,17 @@ mod tests {
         #[test]
         fn child_gets_level_plus_one() {
             let r = ok(parse_input("div>p", Some(0), &Config::default()));
-            assert_eq!(r.level, Some(0)); // div at level 0
+            assert_eq!(r.level, Some(0));
             let child = r.node.expect("div -> p");
-            assert_eq!(child.node.level, Some(1)); // p at level 1
+            assert_eq!(child.element().level, Some(1));
         }
 
         #[test]
         fn sibling_keeps_same_level() {
             let r = ok(parse_input("div+p", Some(3), &Config::default()));
-            assert_eq!(r.level, Some(3)); // div at level 3
+            assert_eq!(r.level, Some(3));
             let sibling = r.node.expect("div + p");
-            assert_eq!(sibling.node.level, Some(3)); // p also at level 3
+            assert_eq!(sibling.element().level, Some(3));
         }
 
         #[test]
@@ -327,9 +325,9 @@ mod tests {
             // div(0) > ul(1) > li(2)
             let r = ok(parse_input("div>ul>li", Some(0), &Config::default()));
             let ul = r.node.expect("div -> ul");
-            assert_eq!(ul.node.level, Some(1));
-            let li = ul.node.node.expect("ul -> li");
-            assert_eq!(li.node.level, Some(2));
+            assert_eq!(ul.element().level, Some(1));
+            let li = ul.element().node.as_ref().expect("ul -> li");
+            assert_eq!(li.element().level, Some(2));
         }
 
         #[test]
@@ -381,8 +379,8 @@ mod tests {
             let r = ok(parse_input(">p", None, &Config::default()));
             assert_eq!(r.identifier.as_deref(), Some("div"));
             let node = r.node.expect(">p should produce div -> p");
-            assert!(matches!(node.node_type, NodeType::Children));
-            assert_eq!(node.node.identifier.as_deref(), Some("p"));
+            assert!(matches!(*node, Node::Children(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("p"));
         }
 
         #[test]
@@ -421,8 +419,8 @@ mod tests {
             let r = ok(parse_input("e>div", None, &jsx_config()));
             assert_eq!(r.identifier.as_deref(), Some(""));
             let node = r.node.expect("fragment should have child");
-            assert!(matches!(node.node_type, NodeType::Children));
-            assert_eq!(node.node.identifier.as_deref(), Some("div"));
+            assert!(matches!(*node, Node::Children(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("div"));
         }
 
         #[test]
@@ -430,8 +428,8 @@ mod tests {
             let r = ok(parse_input("e+p", None, &jsx_config()));
             assert_eq!(r.identifier.as_deref(), Some(""));
             let node = r.node.expect("fragment should have sibling");
-            assert!(matches!(node.node_type, NodeType::Sibling));
-            assert_eq!(node.node.identifier.as_deref(), Some("p"));
+            assert!(matches!(*node, Node::Sibling(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("p"));
         }
     }
 
@@ -471,8 +469,8 @@ mod tests {
             let r = ok(parse_group("(div)+span", None, &Config::default()));
             assert_eq!(r.multiplier, 1);
             let node = r.node.expect("should have a sibling node");
-            assert!(matches!(node.node_type, NodeType::Sibling));
-            assert_eq!(node.node.identifier.as_deref(), Some("span"));
+            assert!(matches!(*node, Node::Sibling(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("span"));
         }
 
         #[test]
@@ -480,8 +478,8 @@ mod tests {
             let r = ok(parse_group("(div)*3+span", None, &Config::default()));
             assert_eq!(r.multiplier, 3);
             let node = r.node.expect("should have a sibling node");
-            assert!(matches!(node.node_type, NodeType::Sibling));
-            assert_eq!(node.node.identifier.as_deref(), Some("span"));
+            assert!(matches!(*node, Node::Sibling(_)));
+            assert_eq!(node.element().identifier.as_deref(), Some("span"));
         }
 
         #[test]
@@ -490,19 +488,23 @@ mod tests {
             let inner = r.group.expect("group content should exist");
             assert_eq!(inner.identifier.as_deref(), Some("ul"));
             let child = inner.node.expect("ul should have child li");
-            assert!(matches!(child.node_type, NodeType::Children));
-            assert_eq!(child.node.identifier.as_deref(), Some("li"));
+            assert!(matches!(*child, Node::Children(_)));
+            assert_eq!(child.element().identifier.as_deref(), Some("li"));
         }
 
         #[test]
         fn sibling_chain_after_group() {
             let r = ok(parse_group("(div)+p+span", None, &Config::default()));
             let first = r.node.expect("should have first sibling");
-            assert!(matches!(first.node_type, NodeType::Sibling));
-            assert_eq!(first.node.identifier.as_deref(), Some("p"));
-            let second = first.node.node.expect("p should have sibling span");
-            assert!(matches!(second.node_type, NodeType::Sibling));
-            assert_eq!(second.node.identifier.as_deref(), Some("span"));
+            assert!(matches!(*first, Node::Sibling(_)));
+            assert_eq!(first.element().identifier.as_deref(), Some("p"));
+            let second = first
+                .element()
+                .node
+                .as_ref()
+                .expect("p should have sibling span");
+            assert!(matches!(**second, Node::Sibling(_)));
+            assert_eq!(second.element().identifier.as_deref(), Some("span"));
         }
 
         #[test]
@@ -517,9 +519,9 @@ mod tests {
             // level given to parse_group is given to the inner Element tree
             let r = ok(parse_group("(div>p)", Some(1), &Config::default()));
             let inner = r.group.expect("group should exist");
-            assert_eq!(inner.level, Some(1)); // div gets level 1
+            assert_eq!(inner.level, Some(1));
             let child = inner.node.expect("div -> p");
-            assert_eq!(child.node.level, Some(2)); // p gets level 2
+            assert_eq!(child.element().level, Some(2));
         }
 
         #[test]
@@ -857,7 +859,7 @@ mod tests {
             let config = html_config(&[("mc", "MyComponent")]);
             let r = ok(parse_input("div>mc", None, &config));
             let child = r.node.expect("div should have child");
-            assert_eq!(child.node.identifier.as_deref(), Some("MyComponent"));
+            assert_eq!(child.element().identifier.as_deref(), Some("MyComponent"));
         }
 
         #[test]
@@ -866,7 +868,7 @@ mod tests {
             let config = html_config(&[("mc", "MyComponent")]);
             let r = ok(parse_input("div+mc", None, &config));
             let sibling = r.node.expect("div should have sibling");
-            assert_eq!(sibling.node.identifier.as_deref(), Some("MyComponent"));
+            assert_eq!(sibling.element().identifier.as_deref(), Some("MyComponent"));
         }
 
         #[test]
