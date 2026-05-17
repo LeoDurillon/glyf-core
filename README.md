@@ -25,7 +25,7 @@ ul>li.item*3
 
 ```toml
 [dependencies]
-glyf-core = "0.3"
+glyf-core = "0.3.1"
 ```
 
 ---
