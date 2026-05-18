@@ -8,13 +8,16 @@ use crate::{
 };
 
 fn extract_tags_from_html(html: &str) -> Vec<&str> {
-    TAG_REGEX.find_iter(html).map(|t| t.as_str()).collect()
+    TAG_REGEX
+        .find_iter(html)
+        .map(|t| t.as_str().trim())
+        .collect()
 }
 
 static TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(<[^<]*)").unwrap());
 
 static ATTRIBUTE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"([a-zA-Z-]+=(?:\{.+?\}|["'].+?["'])|[a-zA-Z]+|>.+$)"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"([a-zA-Z-]+=(?:\{.*?\}|["'].*?["'])|[a-zA-Z]+|>.+$)"#).unwrap());
 
 const VOID_ELEMENTS: &[&str] = &[
     "br", "hr", "img", "input", "col", "area", "base", "link", "meta", "param", "source", "track",
@@ -22,11 +25,10 @@ const VOID_ELEMENTS: &[&str] = &[
 ];
 
 pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<Element, GlyfError> {
-    let cleaned = html.replace("\n", "").replace("  ", "").trim().to_string();
-    if cleaned.is_empty() {
+    if html.is_empty() {
         return Err(GlyfError::EmptyInput);
     }
-    let tags = extract_tags_from_html(&cleaned);
+    let tags = extract_tags_from_html(html);
 
     let (identifier, closing_tag_index) = get_identifier_from_html(&tags)?;
 
@@ -116,11 +118,10 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
 /// Returns [`GlyfError::NoIdentifier`] if `html` is empty or contains no
 /// valid HTML element.
 pub fn html_to_glyf(html: &str) -> Result<String, GlyfError> {
-    let cleaned = html.replace("\n", "").replace("  ", "").trim().to_string();
-    if cleaned.is_empty() {
+    if html.is_empty() {
         return Err(GlyfError::EmptyInput);
     }
-    let tags = extract_tags_from_html(&cleaned);
+    let tags = extract_tags_from_html(html);
     let (mut identifier, closing_tag_index) = get_identifier_from_html(&tags)?;
 
     let is_self_closing = closing_tag_index.is_none();
@@ -199,14 +200,14 @@ pub(super) fn get_identifier_from_html(
                 }
                 return format!(":{}", str);
             };
+            let mut cleaned = value.replace(['"', '\''], "");
             match identifier {
-                "class" | "className" => {
-                    let clean = value.replace(['"', '\''], "");
-                    clean.split_whitespace().map(|c| format!(".{c}")).collect()
-                }
-                "id" => format!("#{}", value.replace(['"', '\''], "")),
+                "class" | "className" => cleaned
+                    .split_whitespace()
+                    .map(|c| format!(".{c}"))
+                    .collect(),
+                "id" => format!("#{}", cleaned),
                 _ => {
-                    let mut cleaned = value.replace(['"', '\''], "");
                     if cleaned.contains([':', '.', '>']) {
                         cleaned = format!("{{{}}}", cleaned);
                     }

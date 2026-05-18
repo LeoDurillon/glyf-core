@@ -18,10 +18,18 @@ use crate::config::ParserMode;
 
 static ATTRIBUTE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(:\{.+?\}|:[\w$-]+=\{.+?\}|:[\w$-]+=[^:>+]+|:[\w$-]+|\.[\w\/-]+|#\{.+?\}|#[\w-]+|>>.+$)",
+        r"(:\{.+?\}|:[\w$-]+=\{.+?\}|:[\w$-]+=[^:>+]*|:[\w$-]+|\.[\w\/-]+|#\{.+?\}|#[\w-]+|>>.+$)",
     )
     .unwrap()
 });
+
+// Regex check for escaped string
+// it's a string that contains only word space or subset of glyf identifier
+// that need to be escaped for it to be parsed successfully
+//
+// e.g url in href need to be escaped
+static ESCAPE_STRING_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\{[\w\s.:><\/-]+\}$").unwrap());
 
 /// Classifies how a parsed attribute maps to its HTML/JSX output.
 ///
@@ -54,15 +62,25 @@ impl AttributeType {
             },
             AttributeType::Props(identifier, value) => {
                 if let Some(value) = value.as_deref() {
-                    let formatted = if mode == ParserMode::HTML {
-                        let stripped = if value.starts_with('{') && value.ends_with('}') {
-                            &value[1..value.len() - 1]
-                        } else {
-                            value
-                        };
-                        format!("\"{}\"", stripped)
-                    } else {
-                        value.to_owned()
+                    let formatted = match (mode, value.starts_with('{') && value.ends_with('}')) {
+                        (ParserMode::HTML, true) => {
+                            let stripped = &value[1..value.len() - 1];
+                            format!("\"{}\"", stripped)
+                        }
+                        (_, false) => format!("\"{}\"", value),
+                        (ParserMode::JSX, true) => {
+                            // If attribute is encapsulated in {}
+                            // and contain only letters/number and at least one space or glyf identifier char
+                            // then it's probably an escaped string literal
+                            if ESCAPE_STRING_REGEX.is_match(value)
+                                && value.contains([' ', ':', '>'])
+                            {
+                                let stripped = &value[1..value.len() - 1];
+                                format!("\"{}\"", stripped)
+                            } else {
+                                value.to_string()
+                            }
+                        }
                     };
 
                     format!(" {}={}", identifier, formatted)
@@ -70,7 +88,8 @@ impl AttributeType {
                     format!(" {}", identifier)
                 }
             }
-            AttributeType::Text(text) => text.to_string(),
+            // Trim surrounding whitespace that may come from formatted HTML source.
+            AttributeType::Text(text) => text.trim().to_string(),
         }
     }
 
@@ -356,6 +375,29 @@ mod tests {
         fn text_renders_content_without_prefix() {
             let a = AttributeType::Text("Hello World".into());
             assert_eq!(a.render(ParserMode::HTML), "Hello World");
+        }
+        #[test]
+        fn render_escaped_string_correctly() {
+            let a = AttributeType::Props("title".into(), Some("{Hello World}".into()));
+            assert_eq!(a.render(ParserMode::JSX), " title=\"Hello World\"");
+            let b =
+                AttributeType::Props("href".into(), Some("{https://example-domain.com}".into()));
+            assert_eq!(
+                b.render(ParserMode::JSX),
+                " href=\"https://example-domain.com\""
+            );
+        }
+
+        #[test]
+        fn shouldnt_capture_function_as_escaped_string() {
+            let a = AttributeType::Props(
+                "onClick".into(),
+                Some("{()=>{setState(old=>old+1)}}".into()),
+            );
+            assert_eq!(
+                a.render(ParserMode::JSX),
+                " onClick={()=>{setState(old=>old+1)}}"
+            );
         }
     }
 
