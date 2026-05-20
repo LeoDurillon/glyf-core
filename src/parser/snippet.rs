@@ -38,7 +38,22 @@ pub(super) fn parse_snippet(value: &str, snippets: &HashMap<String, String>) -> 
         .max_by_key(|(key, _)| key.len());
 
     match longest_match {
-        Some((key, expanded)) => format!("{}{}", expanded, &value[key.len()..]),
+        Some((key, expanded)) => {
+            let mut cleaned_expand = expanded.as_str();
+            let mut cleaned_value = &value[key.len()..];
+            let mut is_self_closing = false;
+            if expanded.ends_with("/") {
+                cleaned_expand = expanded.strip_suffix('/').unwrap_or(expanded);
+                cleaned_value = cleaned_value.strip_suffix('/').unwrap_or(cleaned_value);
+                is_self_closing = true;
+            }
+            format!(
+                "{}{}{}",
+                cleaned_expand,
+                cleaned_value,
+                if is_self_closing { "/" } else { "" }
+            )
+        }
         None => value.to_string(),
     }
 }
@@ -128,6 +143,13 @@ mod tests {
             // "inputxyz" is NOT a valid snippet call (rest = "xyz", no ':')
             let snips = s(&[("input", "input/")]);
             assert_eq!(parse_snippet("inputxyz", &snips), "inputxyz");
+        }
+
+        #[test]
+        fn user_typed_self_closing_matches_self_closing_snippet() {
+            // input/ should not expand to input// via the "input → input/" snippet
+            let snips = s(&[("input", "input/")]);
+            assert_eq!(parse_snippet("input/", &snips), "input/");
         }
     }
 }
