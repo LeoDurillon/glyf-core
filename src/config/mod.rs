@@ -1,9 +1,18 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum ParserMode {
     HTML,
-    JSX,
+    /// JSX mode. The inner value overrides the class attribute name.
+    /// `None` defaults to `"className"` (standard React).
+    /// Use `Some("class")` for frameworks like Qwik.
+    JSX(Option<String>),
+}
+
+impl ParserMode {
+    pub fn is_jsx(&self) -> bool {
+        matches!(self, ParserMode::JSX(_))
+    }
 }
 
 #[non_exhaustive]

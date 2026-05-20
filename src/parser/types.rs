@@ -129,10 +129,10 @@ impl Element {
         level: Option<usize>,
         config: &Config,
     ) -> Result<Self, GlyfError> {
-        let mode = config.mode;
+        let mode = config.mode.clone();
 
         // JSX fragment shorthand: bare "e" → <></>
-        if mode == ParserMode::JSX && value == "e" {
+        if mode.is_jsx() && value == "e" {
             return Ok(Self {
                 identifier: Some(String::new()),
                 self_closing: false,
@@ -162,7 +162,7 @@ impl Element {
         // Concrete element: extract identifier and attributes
         let identifier = IDENTIFIER_REGEX
             .find(&expanded)
-            .ok_or(GlyfError::NoIdentifier)? // ← replaces is_none() + unwrap()
+            .ok_or(GlyfError::NoIdentifier)?
             .as_str()
             .to_string();
 
@@ -284,7 +284,7 @@ impl Display for Element {
                 .iter()
                 .filter_map(|a| {
                     if matches!(a, AttributeType::Id(_) | AttributeType::Props(_, _)) {
-                        Some(a.render(self.mode))
+                        Some(a.render(&self.mode))
                     } else {
                         None
                     }
@@ -296,7 +296,7 @@ impl Display for Element {
                 .iter()
                 .find_map(|a| {
                     if matches!(a, AttributeType::Text(_)) {
-                        Some(a.render(self.mode))
+                        Some(a.render(&self.mode))
                     } else {
                         None
                     }
@@ -304,9 +304,13 @@ impl Display for Element {
                 .unwrap_or(String::new());
 
             let class_attribute = if !classes.is_empty() {
-                match self.mode {
+                match &self.mode {
                     ParserMode::HTML => format!(" class=\"{}\"", classes),
-                    ParserMode::JSX => format!(" className=\"{}\"", classes),
+                    ParserMode::JSX(value) => format!(
+                        " {}=\"{}\"",
+                        value.as_deref().unwrap_or("className"),
+                        classes
+                    ),
                 }
             } else {
                 String::new()

@@ -91,7 +91,7 @@ pub(super) fn parse_group(
         multiplier,
         sibling.map(|sibling| Box::new(Node::Sibling(sibling))),
         level,
-        config.mode,
+        config.mode.clone(),
     ))
 }
 
@@ -178,7 +178,7 @@ mod tests {
     use super::*;
 
     fn jsx_config() -> Config {
-        Config::new(ParserMode::JSX, HashMap::new())
+        Config::new(ParserMode::JSX(None), HashMap::new())
     }
 
     fn html_config(snippets_list: &[(&str, &str)]) -> Config {
@@ -546,7 +546,7 @@ mod tests {
         use std::collections::HashMap;
 
         fn jsx_config() -> Config {
-            Config::new(ParserMode::JSX, HashMap::new())
+            Config::new(ParserMode::JSX(None), HashMap::new())
         }
 
         #[test]

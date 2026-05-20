@@ -350,54 +350,95 @@ pub fn compress_to_tree(html: &str, config: Option<Config>) -> Result<Element, G
 }
 
 #[cfg(test)]
-mod compress_tests {
-    use super::*;
+mod test {
 
-    #[test]
-    fn simple_element() {
-        assert_eq!(compress("<div></div>").unwrap(), "div");
+    #[cfg(test)]
+    mod expand_test {
+        use std::collections::HashMap;
+
+        use crate::config::{Config, ParserMode};
+
+        use super::super::expand;
+
+        #[test]
+        fn expand_uses_custom_class_prop() {
+            let config = Config::new(ParserMode::JSX(Some("class".into())), HashMap::new());
+            assert_eq!(
+                expand("div.foo", None, Some(config)).unwrap(),
+                "<div class=\"foo\"></div>"
+            );
+        }
+
+        #[test]
+        fn expand_multiple_classes_with_custom_prop() {
+            let config = Config::new(ParserMode::JSX(Some("class".into())), HashMap::new());
+            assert_eq!(
+                expand("div.bar.foo", None, Some(config)).unwrap(),
+                "<div class=\"bar foo\"></div>"
+            );
+        }
+
+        #[test]
+        fn expand_jsx_default_still_uses_classname() {
+            let config = Config::new(ParserMode::JSX(None), HashMap::new());
+            assert!(
+                expand("div.foo", None, Some(config))
+                    .unwrap()
+                    .contains("className")
+            );
+        }
     }
 
-    #[test]
-    fn element_with_class() {
-        assert_eq!(compress("<div class=\"foo\"></div>").unwrap(), "div.foo");
-    }
+    #[cfg(test)]
+    mod compress_tests {
+        use super::super::compress;
 
-    #[test]
-    fn element_with_id() {
-        assert_eq!(compress("<div id=\"main\"></div>").unwrap(), "div#main");
-    }
+        #[test]
+        fn simple_element() {
+            assert_eq!(compress("<div></div>").unwrap(), "div");
+        }
 
-    #[test]
-    fn element_with_child() {
-        assert_eq!(compress("<div><p></p></div>").unwrap(), "div>p");
-    }
+        #[test]
+        fn element_with_class() {
+            assert_eq!(compress("<div class=\"foo\"></div>").unwrap(), "div.foo");
+        }
 
-    #[test]
-    fn element_with_siblings() {
-        assert_eq!(compress("<div></div><span></span>").unwrap(), "div+span");
-    }
+        #[test]
+        fn element_with_id() {
+            assert_eq!(compress("<div id=\"main\"></div>").unwrap(), "div#main");
+        }
 
-    #[test]
-    fn element_with_child_and_sibling() {
-        assert_eq!(
-            compress("<div><p></p></div><span></span>").unwrap(),
-            "(div>p)+span"
-        );
-    }
+        #[test]
+        fn element_with_child() {
+            assert_eq!(compress("<div><p></p></div>").unwrap(), "div>p");
+        }
 
-    #[test]
-    fn self_closing_explicit() {
-        assert_eq!(compress("<br />").unwrap(), "br/");
-    }
+        #[test]
+        fn element_with_siblings() {
+            assert_eq!(compress("<div></div><span></span>").unwrap(), "div+span");
+        }
 
-    #[test]
-    fn void_element() {
-        assert_eq!(compress("<br>").unwrap(), "br/");
-    }
+        #[test]
+        fn element_with_child_and_sibling() {
+            assert_eq!(
+                compress("<div><p></p></div><span></span>").unwrap(),
+                "(div>p)+span"
+            );
+        }
 
-    #[test]
-    fn empty_input_returns_err() {
-        assert!(compress("").is_err());
+        #[test]
+        fn self_closing_explicit() {
+            assert_eq!(compress("<br />").unwrap(), "br/");
+        }
+
+        #[test]
+        fn void_element() {
+            assert_eq!(compress("<br>").unwrap(), "br/");
+        }
+
+        #[test]
+        fn empty_input_returns_err() {
+            assert!(compress("").is_err());
+        }
     }
 }

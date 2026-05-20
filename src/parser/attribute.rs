@@ -49,16 +49,18 @@ pub enum AttributeType {
 }
 
 impl AttributeType {
-    pub fn render(&self, mode: ParserMode) -> String {
+    pub fn render(&self, mode: &ParserMode) -> String {
         match self {
             AttributeType::Id(id) => match (mode, id.starts_with('{') && id.ends_with('}')) {
-                (ParserMode::JSX, true) => format!(" id={}", id),
+                (ParserMode::JSX(_), true) => format!(" id={}", id),
                 (ParserMode::HTML, true) => format!(" id=\"{}\"", &id[1..id.len() - 1]),
                 _ => format!(" id=\"{}\"", id),
             },
             AttributeType::Class(class) => match mode {
                 ParserMode::HTML => format!(" class=\"{}\"", class),
-                ParserMode::JSX => format!(" className=\"{}\"", class),
+                ParserMode::JSX(value) => {
+                    format!(" {}=\"{}\"", value.as_deref().unwrap_or("className"), class)
+                }
             },
             AttributeType::Props(identifier, value) => {
                 if let Some(value) = value.as_deref() {
@@ -68,7 +70,7 @@ impl AttributeType {
                             format!("\"{}\"", stripped)
                         }
                         (_, false) => format!("\"{}\"", value),
-                        (ParserMode::JSX, true) => {
+                        (ParserMode::JSX(_), true) => {
                             // If attribute is encapsulated in {}
                             // and contain only letters/number and at least one space or glyf identifier char
                             // then it's probably an escaped string literal
@@ -338,52 +340,52 @@ mod tests {
         #[test]
         fn id_renders_with_value() {
             let a = AttributeType::Id("main".into());
-            assert_eq!(a.render(ParserMode::HTML), " id=\"main\"");
+            assert_eq!(a.render(&ParserMode::HTML), " id=\"main\"");
         }
 
         #[test]
         fn id_renders_empty_string_when_value_is_none() {
             let a = AttributeType::Id("".into());
-            assert_eq!(a.render(ParserMode::HTML), " id=\"\"");
+            assert_eq!(a.render(&ParserMode::HTML), " id=\"\"");
         }
 
         #[test]
         fn class_renders_with_leading_space() {
             let a = AttributeType::Class("flex".into());
-            assert_eq!(a.render(ParserMode::HTML), " class=\"flex\"");
+            assert_eq!(a.render(&ParserMode::HTML), " class=\"flex\"");
         }
 
         #[test]
         fn props_plain_value_is_quoted() {
             let a = AttributeType::Props("href".into(), Some("https://example.com".into()));
-            assert_eq!(a.render(ParserMode::HTML), " href=\"https://example.com\"");
+            assert_eq!(a.render(&ParserMode::HTML), " href=\"https://example.com\"");
         }
 
         #[test]
         fn props_braced_value_is_not_quoted() {
             let a = AttributeType::Props("onClick".into(), Some("{handler}".into()));
-            assert_eq!(a.render(ParserMode::JSX), " onClick={handler}");
+            assert_eq!(a.render(&ParserMode::JSX(None)), " onClick={handler}");
         }
 
         #[test]
         fn props_no_value_renders_as_boolean_attribute() {
             let a = AttributeType::Props("disabled".into(), None);
-            assert_eq!(a.render(ParserMode::HTML), " disabled");
+            assert_eq!(a.render(&ParserMode::HTML), " disabled");
         }
 
         #[test]
         fn text_renders_content_without_prefix() {
             let a = AttributeType::Text("Hello World".into());
-            assert_eq!(a.render(ParserMode::HTML), "Hello World");
+            assert_eq!(a.render(&ParserMode::HTML), "Hello World");
         }
         #[test]
         fn render_escaped_string_correctly() {
             let a = AttributeType::Props("title".into(), Some("{Hello World}".into()));
-            assert_eq!(a.render(ParserMode::JSX), " title=\"Hello World\"");
+            assert_eq!(a.render(&ParserMode::JSX(None)), " title=\"Hello World\"");
             let b =
                 AttributeType::Props("href".into(), Some("{https://example-domain.com}".into()));
             assert_eq!(
-                b.render(ParserMode::JSX),
+                b.render(&ParserMode::JSX(None)),
                 " href=\"https://example-domain.com\""
             );
         }
@@ -395,8 +397,32 @@ mod tests {
                 Some("{()=>{setState(old=>old+1)}}".into()),
             );
             assert_eq!(
-                a.render(ParserMode::JSX),
+                a.render(&ParserMode::JSX(None)),
                 " onClick={()=>{setState(old=>old+1)}}"
+            );
+        }
+
+        #[test]
+        fn class_renders_as_classname_in_jsx_by_default() {
+            let a = AttributeType::Class("foo".into());
+            assert_eq!(a.render(&ParserMode::JSX(None)), " className=\"foo\"");
+        }
+
+        #[test]
+        fn class_renders_with_custom_prop_name() {
+            let a = AttributeType::Class("foo".into());
+            assert_eq!(
+                a.render(&ParserMode::JSX(Some("class".into()))),
+                " class=\"foo\""
+            );
+        }
+
+        #[test]
+        fn class_renders_with_explicit_classname_same_as_default() {
+            let a = AttributeType::Class("foo".into());
+            assert_eq!(
+                a.render(&ParserMode::JSX(Some("className".into()))),
+                a.render(&ParserMode::JSX(None))
             );
         }
     }

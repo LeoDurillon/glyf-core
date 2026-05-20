@@ -88,15 +88,14 @@ pub fn parse_html(html: &str, level: Option<usize>, config: &Config) -> Result<E
             1,
             sibling.map(|s| Box::new(Node::Sibling(s))),
             level,
-            config.mode,
+            config.mode.clone(),
         ));
     }
 
     Element::from_abbr(
-        if identifier.is_empty() && config.mode == ParserMode::JSX {
-            "e"
-        } else {
-            &identifier
+        match (identifier.is_empty(), &config.mode) {
+            (true, ParserMode::JSX(_)) => "e",
+            _ => &identifier,
         },
         1,
         sibling.map_or(children.map(|c| Box::new(Node::Children(c))), |s| {

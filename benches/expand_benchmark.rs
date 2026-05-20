@@ -27,7 +27,7 @@ const INPUTS: &[(&str, &str)] = &[
 fn bench_expand(c: &mut Criterion) {
     let mut group = c.benchmark_group("parser/expand");
     let config = Config::new(
-        ParserMode::JSX,
+        ParserMode::JSX(None),
         HashMap::from([
             ("a".to_string(), "a:href".to_string()),
             ("br".to_string(), "br/".to_string()),
